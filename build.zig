@@ -108,14 +108,17 @@ fn addGateStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, targe
     }
 
     const codegen_run = b.addRunArtifact(exe);
-    codegen_run.addArgs(&.{ "codegen", "--out", "zig-out/gate" });
+    codegen_run.addArgs(&.{"codegen"});
     if (opts.tree) |value| codegen_run.addArgs(&.{ "--tree", value });
     if (opts.xex) |value| codegen_run.addArgs(&.{ "--xex", value });
     if (opts.key) |key| codegen_run.addArgs(&.{ "--key", key });
     if (opts.slice) |n| codegen_run.addArgs(&.{ "--slice", n });
     if (opts.slice_list) |path| codegen_run.addArgs(&.{ "--slice-list", path });
 
-    const slice_path = b.path("zig-out/gate/slice.zig");
+    // `--out` must directly precede the build-managed output directory argument.
+    codegen_run.addArgs(&.{"--out"});
+    const out_dir = codegen_run.addOutputDirectoryArg("gate");
+    const slice_path = out_dir.path(b, "slice.zig");
     const runtime_module = b.createModule(.{
         .root_source_file = b.path("src/runtime/root.zig"),
         .target = target,
@@ -130,6 +133,36 @@ fn addGateStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, targe
     const compiled = b.addObject(.{ .name = "slice", .root_module = slice_module });
     compiled.step.dependOn(&codegen_run.step);
     step.dependOn(&compiled.step);
+
+    const ppc_module = b.createModule(.{
+        .root_source_file = b.path("src/ppc/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const interp_module = b.createModule(.{
+        .root_source_file = b.path("src/interp/interp.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "rezig_ppc", .module = ppc_module },
+            .{ .name = "rezig_runtime", .module = runtime_module },
+        },
+    });
+
+    const gate_module = b.createModule(.{
+        .root_source_file = b.path("tests/gate.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "slice", .module = slice_module },
+            .{ .name = "rezig_runtime", .module = runtime_module },
+            .{ .name = "rezig_interp", .module = interp_module },
+        },
+    });
+    const gate_test = b.addTest(.{ .root_module = gate_module });
+    const run_gate = b.addRunArtifact(gate_test);
+    run_gate.step.dependOn(&codegen_run.step);
+    step.dependOn(&run_gate.step);
 }
 
 /// Tier A/B compile gate. Vulkan behaviour is a manual gate, not a CI gate.

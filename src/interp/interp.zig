@@ -4,8 +4,8 @@
 //! against `Ctx` directly, so an emitter lowering bug shows up as a state mismatch.
 
 const std = @import("std");
-const decode = @import("../ppc/decode.zig");
-const ctx_mod = @import("../runtime/ctx.zig");
+const decode = @import("rezig_ppc").decode;
+const ctx_mod = @import("rezig_runtime").ctx;
 
 pub const Error = error{ Unsupported, StepLimit, InvalidUpdate } || std.mem.Allocator.Error;
 

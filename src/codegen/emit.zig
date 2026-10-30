@@ -67,8 +67,8 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
         switch (op) {
             .blr => try out.appendSlice(allocator, "    return;\n"),
             .nop => {},
-            .addi => try imm32(allocator, &out, "add", op.addi.rt, op.addi.ra, op.addi.imm),
-            .addis => try imm32(allocator, &out, "shl_add", op.addis.rt, op.addis.ra, op.addis.imm),
+            .addi => try immAdd(allocator, &out, op.addi.rt, op.addi.ra, sext(op.addi.imm)),
+            .addis => try immAdd(allocator, &out, op.addis.rt, op.addis.ra, sext32(op.addis.imm)),
             .ori => try immU32(allocator, &out, "|", op.ori.rt, op.ori.ra, op.ori.imm),
             .oris => try immU32Shifted(allocator, &out, op.oris.rt, op.oris.ra, op.oris.imm),
             .andi_dot => {
@@ -83,16 +83,15 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
             .srawi => try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, @bitCast(@as(i32, @truncate(@as(i64, @bitCast(ctx.gpr[{d}])))) >> {d}));\n", .{
                 op.srawi.ra, op.srawi.rs, op.srawi.sh,
             }),
-            .rlwinm => try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, std.math.rotl(u32, @truncate(ctx.gpr[{d}]), {d})) & 0x{X:0>8};\n", .{
+            .rlwinm => try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, std.math.rotl(u32, @as(u32, @truncate(ctx.gpr[{d}])), {d})) & 0x{X:0>8};\n", .{
                 op.rlwinm.ra, op.rlwinm.rs, op.rlwinm.sh, mask32(op.rlwinm.mb, op.rlwinm.me),
             }),
             .mflr => try mov(allocator, &out, op.mflr.rt, "lr"),
             .mtlr => try movTo(allocator, &out, "lr", op.mtlr.rt),
             .mfctr => try mov(allocator, &out, op.mfctr.rt, "ctr"),
             .mtctr => try movTo(allocator, &out, "ctr", op.mtctr.rt),
-            .lwz, .lbz => try load(allocator, &out, op, 4),
-            .lbzu => try load(allocator, &out, op, 1),
-            .lwzu => try load(allocator, &out, op, 4),
+            .lwz, .lwzu => try load(allocator, &out, op, 4),
+            .lbz, .lbzu => try load(allocator, &out, op, 1),
             .stw, .stb, .stwu => try store(allocator, &out, op),
             .cmpwi => try compareImm(allocator, &out, op.cmpwi.crf, op.cmpwi.ra, op.cmpwi.imm, true),
             .cmplwi => try compareImm(allocator, &out, op.cmplwi.crf, op.cmplwi.ra, op.cmplwi.imm, false),
@@ -108,16 +107,20 @@ fn gpr(reg: u8) u8 {
     return reg;
 }
 
-fn imm32(allocator: std.mem.Allocator, out: *std.ArrayList(u8), comptime op: []const u8, rt: u8, ra: u8, imm: i16) !void {
-    if (std.mem.eql(u8, op, "add")) {
-        if (ra == 0) {
-            try out.print(allocator, "    ctx.gpr[{d}] = 0x{X:0>16};\n", .{ gpr(rt), @as(u64, @bitCast(@as(i64, imm))) & 0xffff_ffff });
-        } else {
-            try out.print(allocator, "    ctx.gpr[{d}] = ctx.gpr[{d}] +% 0x{X};\n", .{ gpr(rt), gpr(ra), @as(u64, @bitCast(@as(i64, imm))) & 0xffff_ffff });
-        }
+fn immAdd(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, ra: u8, value: u64) !void {
+    if (ra == 0) {
+        try out.print(allocator, "    ctx.gpr[{d}] = 0x{X:0>16};\n", .{ gpr(rt), value });
     } else {
-        try out.print(allocator, "    ctx.gpr[{d}] = (ctx.gpr[{d}] << 16) +% 0x{X:0>16};\n", .{ gpr(rt), gpr(ra), @as(u64, @bitCast(@as(i64, imm))) & 0xffff_ffff });
+        try out.print(allocator, "    ctx.gpr[{d}] = ctx.gpr[{d}] +% 0x{X:0>16};\n", .{ gpr(rt), gpr(ra), value });
     }
+}
+
+fn sext(value: i16) u64 {
+    return @bitCast(@as(i64, value));
+}
+
+fn sext32(value: i16) u64 {
+    return @bitCast(@as(i64, value) << 16);
 }
 
 fn immU32(allocator: std.mem.Allocator, out: *std.ArrayList(u8), comptime op: []const u8, rt: u8, ra: u8, imm: u16) !void {
@@ -130,7 +133,7 @@ fn immU32Shifted(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, 
 
 fn binop(allocator: std.mem.Allocator, out: *std.ArrayList(u8), comptime op: []const u8, rt: u8, ra: u8, rb: u8) !void {
     if (std.mem.eql(u8, op, "sraw")) {
-        try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, @bitCast(@as(i32, @truncate(@as(i64, @bitCast(ctx.gpr[{d}])))) >> @truncate(ctx.gpr[{d}])));\n", .{ gpr(rt), gpr(ra), gpr(rb) });
+        try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, @bitCast(@as(i32, @truncate(@as(i64, @bitCast(ctx.gpr[{d}])))) >> @as(u32, @truncate(ctx.gpr[{d}]))));\n", .{ gpr(rt), gpr(ra), gpr(rb) });
         return;
     }
     try out.print(allocator, "    ctx.gpr[{d}] = ctx.gpr[{d}] {s} ctx.gpr[{d}];\n", .{ gpr(rt), gpr(ra), op, gpr(rb) });
@@ -156,7 +159,7 @@ fn load(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, comptim
         .lbzu => |f| .{ f.rt, f.ra, f.imm },
         else => unreachable,
     };
-    try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}(ctx.gpr[{d}] +% 0x{X});\n", .{ gpr(rt), size * 8, gpr(ra), @as(u16, @bitCast(imm)) });
+    try printAddr(allocator, out, size * 8, "load", true, gpr(rt), ra, imm);
 }
 
 fn store(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn) !void {
@@ -166,7 +169,33 @@ fn store(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn) !void 
         .stb => |f| .{ f.rt, f.ra, f.imm, 8 },
         else => unreachable,
     };
-    try out.print(allocator, "    ctx.store{d}(ctx.gpr[{d}] +% 0x{X}, ctx.gpr[{d}]);\n", .{ size, gpr(ra), @as(u16, @bitCast(imm)), gpr(rt) });
+    try printAddr(allocator, out, size, "store", false, gpr(rt), ra, imm);
+}
+
+fn printAddr(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    bits: u8,
+    comptime kind: []const u8,
+    is_load: bool,
+    rt: u8,
+    ra: u8,
+    imm: i16,
+) !void {
+    const value = @as(u32, @bitCast(@as(i32, imm)));
+    if (is_load) {
+        if (ra == 0) {
+            try out.print(allocator, "    ctx.gpr[{d}] = ctx.{s}{d}(0 +% 0x{X:0>8});\n", .{ rt, kind, bits, value });
+        } else {
+            try out.print(allocator, "    ctx.gpr[{d}] = ctx.{s}{d}(@as(u32, @truncate(ctx.gpr[{d}])) +% 0x{X:0>8});\n", .{ rt, kind, bits, ra, value });
+        }
+    } else {
+        if (ra == 0) {
+            try out.print(allocator, "    ctx.{s}{d}(0 +% 0x{X:0>8}, ctx.gpr[{d}]);\n", .{ kind, bits, value, rt });
+        } else {
+            try out.print(allocator, "    ctx.{s}{d}(@as(u32, @truncate(ctx.gpr[{d}])) +% 0x{X:0>8}, ctx.gpr[{d}]);\n", .{ kind, bits, ra, value, rt });
+        }
+    }
 }
 
 fn compareImm(allocator: std.mem.Allocator, out: *std.ArrayList(u8), crf: u3, ra: u8, imm: anytype, signed: bool) !void {
@@ -197,7 +226,7 @@ test "golden function" {
         \\    // 0x00000100
         \\    ctx.gpr[3] = 0x0000000000000001;
         \\    // 0x00000104
-        \\    ctx.store32(ctx.gpr[11] +% 0x14, ctx.gpr[10]);
+        \\    ctx.store32(@as(u32, @truncate(ctx.gpr[11])) +% 0x00000014, ctx.gpr[10]);
         \\    // 0x00000108
         \\    return;
         \\}
