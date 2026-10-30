@@ -19,6 +19,7 @@ pub const Run = struct { tree: []const u8 };
 pub const Command = union(enum) {
     extract: Extract,
     analyze: Analyze,
+    coverage: Analyze,
     xex_convert: Xex,
     codegen: Codegen,
     build: Build,
@@ -106,6 +107,13 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
         const has_xex = opts.xex != null;
         if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
         return .{ .analyze = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
+    }
+    if (std.mem.eql(u8, name, "coverage")) {
+        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list" });
+        const has_tree = opts.tree != null;
+        const has_xex = opts.xex != null;
+        if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
+        return .{ .coverage = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "xex")) {
         const input = try opts.require("in");
@@ -196,6 +204,17 @@ test "unknown option" {
 
 test "duplicate option is bad value" {
     try testing.expectError(error.BadValue, parse(&.{ "rezig", "extract", "--iso", "a", "--iso", "b", "--out", "d" }));
+}
+
+test "coverage needs exactly one input" {
+    try testing.expectError(error.MissingOption, parse(&.{ "rezig", "coverage" }));
+    try testing.expectError(error.BadValue, parse(&.{ "rezig", "coverage", "--tree", "t", "--xex", "a.xex" }));
+}
+
+test "coverage accepts a key" {
+    const cmd = try parse(&.{ "rezig", "coverage", "--xex", "a.xex", "--key", "k" });
+    try testing.expectEqualStrings("a.xex", cmd.coverage.xex.?);
+    try testing.expectEqualStrings("k", cmd.coverage.key.?);
 }
 
 test "xex needs input and output" {

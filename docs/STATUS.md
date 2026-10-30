@@ -85,6 +85,10 @@ Done and verified on the real disc:
 - ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
 - codegen: 20 functions from `tests/slice/addresses.json`, `zig fmt` clean.
+- coverage: 1,039 discovered functions, 126,876 instructions. Decoder 86.88%, emitter 67.83%,
+  45 functions fully emittable. Gaps are dominated by `bc` 11,005, `bl` 7,673 and `b` 3,525;
+  then `stfs`/`lfs`, float and VMX. 16,637 words are undecoded, mostly primary opcodes 31, 62,
+  04, 58 and 40. Reproduce with `zig build coverage -Dxex=<xex>`.
 - gate: 20 functions x 64 seeded cases = 1280 differential cases, emitted Zig vs the interpreter,
   PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte.
 - portability: x86_64-windows and aarch64-linux objects build.
@@ -110,4 +114,5 @@ Done and verified on the real disc:
 
 ## Next
 
-P1: whole-image emission, kernel surface, and guest-truth traces if wanted.
+P1: intra-function branches and calls first (`bc`, `bl`, `b` are 83% of the unsupported
+instructions), then float/VMX and the undecoded primary opcodes, then whole-image emission.

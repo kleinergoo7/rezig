@@ -42,6 +42,7 @@ pub fn build(b: *std.Build) void {
     const opts = readOptions(b);
     addExtractStep(b, exe, opts);
     addAnalyzeStep(b, exe, opts);
+    addCoverageStep(b, exe, opts);
     addXexStep(b, exe, opts);
     addGateStep(b, exe, opts, target, optimize);
     addPortabilityStep(b, xextool);
@@ -89,6 +90,20 @@ fn addAnalyzeStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) vo
 
     const run = b.addRunArtifact(exe);
     run.addArgs(&.{"analyze"});
+    if (opts.tree) |value| run.addArgs(&.{ "--tree", value });
+    if (opts.xex) |value| run.addArgs(&.{ "--xex", value });
+    if (opts.key) |key| run.addArgs(&.{ "--key", key });
+    step.dependOn(&run.step);
+}
+
+fn addCoverageStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) void {
+    const step = b.step("coverage", "Report decoder and emitter coverage over discovered code");
+    if ((opts.tree == null) == (opts.xex == null)) {
+        return failStep(b, step, "exactly one of -Dtree=<dir> or -Dxex=<path>");
+    }
+
+    const run = b.addRunArtifact(exe);
+    run.addArgs(&.{"coverage"});
     if (opts.tree) |value| run.addArgs(&.{ "--tree", value });
     if (opts.xex) |value| run.addArgs(&.{ "--xex", value });
     if (opts.key) |key| run.addArgs(&.{ "--key", key });
