@@ -3,7 +3,7 @@
 const std = @import("std");
 const Io = std.Io;
 
-pub const Error = error{ Truncated, AccessDenied, FileNotFound };
+pub const Error = error{ Truncated, AccessDenied };
 
 pub const Iso = struct {
     file: Io.File,

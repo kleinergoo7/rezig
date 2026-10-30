@@ -5,7 +5,6 @@ const Io = std.Io;
 const iso_mod = @import("../disc/iso.zig");
 const xdvdfs = @import("../disc/xdvdfs.zig");
 const xex_header = @import("../xex/header.zig");
-const xex_aes = @import("../xex/aes.zig");
 const xex_image = @import("../xex/image.zig");
 const manifest = @import("manifest.zig");
 const parse = @import("parse.zig");
@@ -25,7 +24,7 @@ pub const title_update_threshold: u32 = 0x00000800;
 
 const copy_chunk: usize = 1 << 20;
 
-pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options) !Summary {
+pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !Summary {
     var src = try iso_mod.Iso.open(io, opts.iso);
     defer src.close(io);
 
@@ -50,15 +49,12 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options) !Summary {
     var image_verified = false;
     var image_sha256: ?[manifest.digest_hex_len]u8 = null;
 
-    if (opts.key) |key_path| {
-        var key: [16]u8 = undefined;
-        try xex_aes.loadKey(io, key_path, &key);
-
+    if (key) |supplied_key| {
         const xex_bytes = try allocator.alloc(u8, xex_entry.size);
         defer allocator.free(xex_bytes);
         try src.readAt(io, vol.base + @as(u64, xex_entry.sector) * xdvdfs.SECTOR, xex_bytes);
 
-        var img = try xex_image.loadBytes(allocator, xex_bytes, key);
+        var img = try xex_image.loadBytes(allocator, xex_bytes, supplied_key);
         defer img.deinit(allocator);
 
         var digest: [32]u8 = undefined;
@@ -246,7 +242,7 @@ test "extract writes the tree and manifest without a key" {
     var out_buf: [256]u8 = undefined;
     const out_path = try tmpPath(&tmp, &out_buf, "out");
 
-    const summary = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null });
+    const summary = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null }, null);
     try testing.expectEqual(@as(u32, 3), summary.files);
     try testing.expectEqual(@as(u32, 0), summary.skipped);
     try testing.expectEqual(false, summary.image_verified);
@@ -277,8 +273,8 @@ test "second extract skips every file" {
     var out_buf: [256]u8 = undefined;
     const out_path = try tmpPath(&tmp, &out_buf, "out");
 
-    const first = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null });
-    const second = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null });
+    const first = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null }, null);
+    const second = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null }, null);
     try testing.expectEqual(@as(u32, 0), first.skipped);
     try testing.expectEqual(@as(u32, 3), second.skipped);
     try testing.expectEqual(@as(u64, 0), second.bytes);
@@ -296,7 +292,7 @@ test "a corrupted file is rewritten" {
     var out_buf: [256]u8 = undefined;
     const out_path = try tmpPath(&tmp, &out_buf, "out");
 
-    _ = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null });
+    _ = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null }, null);
 
     const junk = try testing.allocator.alloc(u8, 4096);
     defer testing.allocator.free(junk);
@@ -305,33 +301,9 @@ test "a corrupted file is rewritten" {
     defer out_dir.close(io);
     try out_dir.writeFile(io, .{ .sub_path = "common.rpf", .data = junk });
 
-    const second = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null });
+    const second = try run(testing.allocator, io, .{ .iso = iso_path, .out = out_path, .key = null }, null);
     try testing.expectEqual(@as(u32, 2), second.skipped);
     try testing.expectEqual(@as(u64, 4096), second.bytes);
-}
-
-test "thirty-two byte key is bad key size" {
-    const io = testIo();
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const xex = try xex_writer.buildFull(testing.allocator, 0, 1);
-    defer testing.allocator.free(xex);
-    var iso_buf: [256]u8 = undefined;
-    const iso_path = try setupIso(io, &tmp, xex, &iso_buf);
-    var out_buf: [256]u8 = undefined;
-    const out_path = try tmpPath(&tmp, &out_buf, "out");
-
-    const key = std.mem.zeroes([32]u8);
-    try tmp.dir.writeFile(io, .{ .sub_path = "key.bin", .data = &key });
-    var key_buf: [256]u8 = undefined;
-    const key_path = try tmpPath(&tmp, &key_buf, "key.bin");
-
-    try testing.expectError(error.BadKeySize, run(testing.allocator, io, .{
-        .iso = iso_path,
-        .out = out_path,
-        .key = key_path,
-    }));
 }
 
 test "wrong key is wrong key and writes nothing" {
@@ -346,16 +318,12 @@ test "wrong key is wrong key and writes nothing" {
     var out_buf: [256]u8 = undefined;
     const out_path = try tmpPath(&tmp, &out_buf, "out");
 
-    const key = std.mem.zeroes([16]u8);
-    try tmp.dir.writeFile(io, .{ .sub_path = "key.bin", .data = &key });
-    var key_buf: [256]u8 = undefined;
-    const key_path = try tmpPath(&tmp, &key_buf, "key.bin");
-
+    const wrong_key: [16]u8 = @splat(0);
     try testing.expectError(error.WrongKey, run(testing.allocator, io, .{
         .iso = iso_path,
         .out = out_path,
-        .key = key_path,
-    }));
+        .key = null,
+    }, wrong_key));
     try testing.expectError(error.FileNotFound, Io.Dir.cwd().openDir(io, out_path, .{}));
 }
 
@@ -377,7 +345,7 @@ test "title update version is rejected" {
         .iso = iso_path,
         .out = out_path,
         .key = null,
-    }));
+    }, null));
 }
 
 test "foreign output directory is refused" {
@@ -400,7 +368,7 @@ test "foreign output directory is refused" {
         .iso = iso_path,
         .out = out_path,
         .key = null,
-    }));
+    }, null));
 }
 
 test "title update rejection creates no tree" {
@@ -421,6 +389,6 @@ test "title update rejection creates no tree" {
         .iso = iso_path,
         .out = out_path,
         .key = null,
-    }));
+    }, null));
     try testing.expectError(error.FileNotFound, Io.Dir.cwd().openDir(io, out_path, .{}));
 }

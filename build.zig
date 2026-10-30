@@ -51,13 +51,19 @@ fn addExtractStep(b: *std.Build, exe: *std.Build.Step.Compile) void {
 
 fn addAnalyzeStep(b: *std.Build, exe: *std.Build.Step.Compile) void {
     const step = b.step("analyze", "Report the XEX version, entry point and PE sections");
-    const tree = b.option([]const u8, "tree", "extracted game tree") orelse
-        return failStep(b, step, "-Dtree=<dir>");
-    const key = b.option([]const u8, "key", "path to a 16-byte XEX key") orelse
-        return failStep(b, step, "-Dkey=<path>");
+    const tree = b.option([]const u8, "tree", "extracted game tree");
+    const xex = b.option([]const u8, "xex", "path to a XEX file");
+    if ((tree == null) == (xex == null)) {
+        return failStep(b, step, "exactly one of -Dtree=<dir> or -Dxex=<path>");
+    }
 
     const run = b.addRunArtifact(exe);
-    run.addArgs(&.{ "analyze", "--tree", tree, "--key", key });
+    run.addArgs(&.{"analyze"});
+    if (tree) |value| run.addArgs(&.{ "--tree", value });
+    if (xex) |value| run.addArgs(&.{ "--xex", value });
+    if (b.option([]const u8, "key", "path to a 16-byte XEX key")) |key| {
+        run.addArgs(&.{ "--key", key });
+    }
     step.dependOn(&run.step);
 }
 

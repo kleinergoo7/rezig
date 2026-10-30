@@ -5,6 +5,7 @@ const Io = std.Io;
 const parse = @import("parse.zig");
 const analyze = @import("analyze.zig");
 const extract = @import("extract.zig");
+const keys = @import("key.zig");
 const manifest = @import("manifest.zig");
 
 pub const usage =
@@ -25,7 +26,20 @@ pub const usage =
     \\
 ;
 
-pub fn run(gpa: std.mem.Allocator, io: Io, args: []const [:0]const u8) !u8 {
+pub fn run(
+    gpa: std.mem.Allocator,
+    io: Io,
+    args: []const [:0]const u8,
+    env_key_path: ?[]const u8,
+    home: ?[]const u8,
+) !u8 {
+    var config_buf: [512]u8 = undefined;
+    const config_path: ?[]const u8 = if (home) |h|
+        try std.fmt.bufPrint(&config_buf, "{s}/{s}", .{ h, keys.config_sub_path })
+    else
+        null;
+    const key_paths = keys.Paths{ .env = env_key_path, .config = config_path };
+
     var err_buf: [1024]u8 = undefined;
     var err_writer = Io.File.stderr().writer(io, &err_buf);
     const err = &err_writer.interface;
@@ -49,11 +63,12 @@ pub fn run(gpa: std.mem.Allocator, io: Io, args: []const [:0]const u8) !u8 {
             return 0;
         },
         .extract => |opts| {
-            const summary = extract.run(gpa, io, opts) catch |e| {
+            const key = keys.resolve(io, opts.key, key_paths) catch |e| {
+                try printKeyError(io, err, e, opts.key, key_paths);
+                return 1;
+            };
+            const summary = extract.run(gpa, io, opts, key) catch |e| {
                 try err.print("rezig extract: {s}: iso '{s}', out '{s}'", .{ @errorName(e), opts.iso, opts.out });
-                if (e == error.BadKeySize) {
-                    if (opts.key) |key_path| try keySizeHint(io, key_path, err);
-                }
                 try err.writeAll("\n");
                 try err.flush();
                 return 1;
@@ -62,10 +77,16 @@ pub fn run(gpa: std.mem.Allocator, io: Io, args: []const [:0]const u8) !u8 {
             return 0;
         },
         .analyze => |opts| {
-            analyze.run(gpa, io, opts) catch |e| {
-                try err.print("rezig analyze: {s}: tree '{s}', key '{s}'", .{ @errorName(e), opts.tree, opts.key });
-                if (e == error.BadKeySize) try keySizeHint(io, opts.key, err);
-                try err.writeAll("\n");
+            const key = keys.resolve(io, opts.key, key_paths) catch |e| {
+                try printKeyError(io, err, e, opts.key, key_paths);
+                return 1;
+            };
+            analyze.run(gpa, io, opts, key) catch |e| {
+                if (e == error.KeyMissing) {
+                    try printKeyMissing(io, err, key_paths);
+                } else {
+                    try err.print("rezig analyze: {s}\n", .{@errorName(e)});
+                }
                 try err.flush();
                 return 1;
             };
@@ -79,9 +100,34 @@ pub fn run(gpa: std.mem.Allocator, io: Io, args: []const [:0]const u8) !u8 {
     }
 }
 
-fn keySizeHint(io: Io, path: []const u8, writer: anytype) !void {
-    const st = Io.Dir.cwd().statFile(io, path, .{}) catch return;
-    try writer.print(" (key file is {d} bytes, expected 16)", .{st.size});
+fn printKeyError(
+    io: Io,
+    writer: anytype,
+    e: anyerror,
+    explicit: ?[]const u8,
+    paths: keys.Paths,
+) !void {
+    try writer.print("rezig: {s}", .{@errorName(e)});
+    const used = explicit orelse paths.env orelse paths.config orelse "";
+    if (used.len != 0) {
+        const st = Io.Dir.cwd().statFile(io, used, .{}) catch null;
+        try writer.print(": key file '{s}'", .{used});
+        if (st) |s| try writer.print(" is {d} bytes, expected 16", .{s.size});
+    }
+    try writer.writeAll("\n");
+    try writer.flush();
+}
+
+fn printKeyMissing(io: Io, writer: anytype, paths: keys.Paths) !void {
+    _ = io;
+    try writer.writeAll("rezig: KeyMissing: this XEX is encrypted. Provide a 16-byte key one of these ways:\n");
+    if (paths.config) |config| {
+        try writer.print("  - place it at {s} (raw bytes, chmod 600)\n", .{config});
+    }
+    try writer.writeAll("  - set REZIG_XEX_KEY to a key file path\n");
+    try writer.writeAll("  - pass --key <path>\n");
+    try writer.writeAll("  - or pass --xex <unlocked.xex> for an already-decrypted image\n");
+    try writer.flush();
 }
 
 fn printExtractSummary(io: Io, opts: parse.Extract, summary: extract.Summary) !void {
@@ -112,12 +158,12 @@ fn printExtractSummary(io: Io, opts: parse.Extract, summary: extract.Summary) !v
 
 test "no arguments prints usage and exits 2" {
     const io = Io.Threaded.global_single_threaded.io();
-    try std.testing.expectEqual(@as(u8, 2), try run(std.testing.allocator, io, &.{"rezig"}));
+    try std.testing.expectEqual(@as(u8, 2), try run(std.testing.allocator, io, &.{"rezig"}, null, null));
 }
 
 test "help exits 0" {
     const io = Io.Threaded.global_single_threaded.io();
-    try std.testing.expectEqual(@as(u8, 0), try run(std.testing.allocator, io, &.{ "rezig", "help" }));
+    try std.testing.expectEqual(@as(u8, 0), try run(std.testing.allocator, io, &.{ "rezig", "help" }, null, null));
 }
 
 test "manifest tool version matches the package version" {

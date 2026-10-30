@@ -44,10 +44,6 @@ pub const Version = struct {
     pub fn qfe(self: Version) u8 {
         return @truncate(self.value);
     }
-
-    pub fn eql(self: Version, other: Version) bool {
-        return self.value == other.value;
-    }
 };
 
 pub const Encryption = enum { none, normal };
@@ -247,7 +243,7 @@ test "version fields decode 0.0.0.5 and 0.0.8.0" {
     try testing.expectEqual(@as(u4, 0), v8.minor());
     try testing.expectEqual(@as(u16, 8), v8.build());
     try testing.expectEqual(@as(u8, 0), v8.qfe());
-    try testing.expect(!v5.eql(v8));
+    try testing.expect(v5.value != v8.value);
 }
 
 test "bad magic is rejected" {

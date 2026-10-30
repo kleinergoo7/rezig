@@ -11,6 +11,9 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(gpa);
     defer gpa.free(args);
 
-    const code = try cli.run(gpa, init.io, args);
+    const env_key_path = init.environ_map.get("REZIG_XEX_KEY");
+    const home = init.environ_map.get("HOME") orelse init.environ_map.get("USERPROFILE");
+
+    const code = try cli.run(gpa, init.io, args, env_key_path, home);
     std.process.exit(code);
 }

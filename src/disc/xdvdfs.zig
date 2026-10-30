@@ -27,7 +27,6 @@ pub const Error = error{
     DuplicatePath,
     PathTooLong,
     TooDeep,
-    NotFound,
     AccessDenied,
     FileNotFound,
     OutOfMemory,
@@ -71,27 +70,6 @@ pub const Volume = struct {
     fn checkRange(self: *const Volume, sector: u32, size: u32) Error!void {
         const start = self.base + @as(u64, sector) * SECTOR;
         if (start > self.end or size > self.end - start) return error.EntryOutOfRange;
-    }
-
-    pub fn readFile(
-        self: *const Volume,
-        allocator: std.mem.Allocator,
-        comptime S: type,
-        src: *S,
-        io: Io,
-        path: []const u8,
-    ) Error![]u8 {
-        const entries = try self.walk(allocator, S, src, io);
-        defer freeEntries(allocator, entries);
-
-        for (entries) |e| {
-            if (!std.mem.eql(u8, e.path, path)) continue;
-            const bytes = try allocator.alloc(u8, e.size);
-            errdefer allocator.free(bytes);
-            try src.readAt(io, self.base + @as(u64, e.sector) * SECTOR, bytes);
-            return bytes;
-        }
-        return error.NotFound;
     }
 };
 
@@ -300,19 +278,6 @@ test "walk lists files with sizes and normalized paths" {
 
     const inner = find(entries, "data/inner.bin").?;
     try testing.expectEqual(@as(u32, 7), inner.size);
-}
-
-test "readFile returns exact bytes" {
-    const io = testIo();
-    var img = try iso_writer.build(testing.allocator, 0);
-    defer img.deinit(testing.allocator);
-
-    const vol = try open(iso_writer.Image, &img, io);
-    const bytes = try vol.readFile(testing.allocator, iso_writer.Image, &img, io, "data/inner.bin");
-    defer testing.allocator.free(bytes);
-
-    try testing.expectEqual(@as(usize, 7), bytes.len);
-    for (bytes, 0..) |b, i| try testing.expectEqual(@as(u8, @truncate(3 +% @as(u8, @truncate(i)))), b);
 }
 
 test "entry past the source is rejected" {

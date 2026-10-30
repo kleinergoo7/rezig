@@ -18,6 +18,7 @@ pub const Error = header.Error || error{
     BadPe,
     NotPowerPc,
     TooLarge,
+    KeyMissing,
 } || aes.DecryptError || std.Io.File.OpenError || std.Io.File.StatError || std.Io.File.ReadPositionalError;
 
 pub const PeSection = struct {
@@ -58,7 +59,7 @@ pub fn load(
     allocator: std.mem.Allocator,
     io: Io,
     xex_path: []const u8,
-    key: [16]u8,
+    key: ?[16]u8,
 ) Error!Image {
     const file = try Io.Dir.cwd().openFile(io, xex_path, .{});
     defer file.close(io);
@@ -76,7 +77,7 @@ pub fn load(
 pub fn loadBytes(
     allocator: std.mem.Allocator,
     bytes: []const u8,
-    key: [16]u8,
+    key: ?[16]u8,
 ) Error!Image {
     if (bytes.len < 0x1000) return error.Truncated;
 
@@ -88,7 +89,8 @@ pub fn loadBytes(
     defer h.deinit(allocator);
 
     const payload_len = bytes.len - header_size;
-    if (payload_len % 16 != 0) return error.Truncated;
+    // AES needs whole blocks; an unencrypted payload has no such constraint.
+    if (h.file_format.encryption == .normal and payload_len % 16 != 0) return error.Truncated;
 
     const payload = try allocator.alloc(u8, payload_len);
     defer allocator.free(payload);
@@ -97,8 +99,9 @@ pub fn loadBytes(
     if (h.security.image_size == 0) return error.ImageSizeMismatch;
 
     if (h.file_format.encryption == .normal) {
+        const supplied = key orelse return error.KeyMissing;
         var session_key: [16]u8 = undefined;
-        try aes.decryptCbc(key, std.mem.zeroes([16]u8), &h.security.wrapped_key, &session_key);
+        try aes.decryptCbc(supplied, std.mem.zeroes([16]u8), &h.security.wrapped_key, &session_key);
         try decryptPayload(session_key, payload);
     }
 
@@ -338,4 +341,63 @@ test "non powerpc machine is refused" {
     const path = try writeFixture(io, &tmp, "x86.xex", bytes, &path_buf);
 
     try testing.expectError(error.NotPowerPc, load(testing.allocator, io, path, zero_key));
+}
+
+test "chunked decryption matches a single pass" {
+    const key: [16]u8 = @splat(7);
+    const size = 2 * 1024 * 1024 + 512 * 1024;
+
+    const chunked = try testing.allocator.alloc(u8, size);
+    defer testing.allocator.free(chunked);
+    const single = try testing.allocator.alloc(u8, size);
+    defer testing.allocator.free(single);
+
+    for (chunked, 0..) |*byte, i| byte.* = @truncate(i *% 31 +% 7);
+    @memcpy(single, chunked);
+
+    try decryptPayload(key, chunked);
+    try aes.decryptCbc(key, std.mem.zeroes([16]u8), single, single);
+
+    try testing.expectEqualSlices(u8, single, chunked);
+}
+
+test "zero blocks are inserted" {
+    const io = Io.Threaded.global_single_threaded.io();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const bytes = try xex_writer.buildFull(testing.allocator, 0, 1);
+    defer testing.allocator.free(bytes);
+
+    const ff = bytes[xex_writer.off.file_format..];
+    std.mem.writeInt(u32, ff[8..12], 0x200, .big);
+    std.mem.writeInt(u32, ff[12..16], 0x600, .big);
+    std.mem.writeInt(u32, ff[16..20], 0x1800, .big);
+    std.mem.writeInt(u32, ff[20..24], 0, .big);
+
+    var path_buf: [256]u8 = undefined;
+    const path = try writeFixture(io, &tmp, "zeros.xex", bytes, &path_buf);
+
+    var img = try load(testing.allocator, io, path, zero_key);
+    defer img.deinit(testing.allocator);
+
+    const expected = try xex_writer.buildPeImage(testing.allocator);
+    defer testing.allocator.free(expected);
+
+    try testing.expectEqualSlices(u8, expected[0..0x200], img.bytes[0..0x200]);
+    for (img.bytes[0x200..0x800]) |byte| try testing.expectEqual(@as(u8, 0), byte);
+    try testing.expectEqualSlices(u8, expected[0x200..0x400], img.bytes[0x800..0xa00]);
+}
+
+test "encrypted input without a key reports key missing" {
+    const io = Io.Threaded.global_single_threaded.io();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const bytes = try xex_writer.buildFull(testing.allocator, 1, 1);
+    defer testing.allocator.free(bytes);
+    var path_buf: [256]u8 = undefined;
+    const path = try writeFixture(io, &tmp, "encrypted-nokey.xex", bytes, &path_buf);
+
+    try testing.expectError(error.KeyMissing, load(testing.allocator, io, path, null));
 }
