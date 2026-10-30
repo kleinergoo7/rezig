@@ -45,7 +45,9 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
 
     for (functions) |function| {
         var complete = true;
-        for (function.words) |word| {
+        const base = function.addr;
+        const end = base +% @as(u32, @intCast(function.words.len)) * 4;
+        for (function.words, 0..) |word, i| {
             summary.instructions += 1;
             const op = decode.decode(word) catch {
                 summary.decode_failures += 1;
@@ -54,7 +56,8 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
                 continue;
             };
             summary.decoded += 1;
-            if (emit.supports(op)) {
+            const at = base + @as(u32, @intCast(i)) * 4;
+            if (emit.supportsAt(op, at, base, end)) {
                 summary.emitted += 1;
             } else {
                 complete = false;

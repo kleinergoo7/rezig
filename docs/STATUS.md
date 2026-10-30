@@ -62,7 +62,7 @@ library takes console keys from its caller, so rezig's binary contains no AES ke
 no signing private key; the user's key arrives through the normal resolution order.
 
 Verified on 2026-10-30: the rewritten `default.xex` is byte-identical to the copy the C++ tool
-produced (11,841,536 bytes), and the result passes `analyze` and the 1280-case gate.
+produced (11,841,536 bytes), and the result passes `analyze` and the 3200-case gate.
 
 ## Licence
 
@@ -84,17 +84,20 @@ Done and verified on the real disc:
   `data/gta4/default.xex.unenc`. No key needed for that file.
 - ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
-- codegen: 20 functions from `tests/slice/addresses.json`, `zig fmt` clean.
-- coverage: 1,039 discovered functions, 126,876 instructions. Decoder 86.88%, emitter 67.83%,
-  45 functions fully emittable. Gaps are dominated by `bc` 11,005, `bl` 7,673 and `b` 3,525;
-  then `stfs`/`lfs`, float and VMX. 16,637 words are undecoded, mostly primary opcodes 31, 62,
-  04, 58 and 40. Reproduce with `zig build coverage -Dxex=<xex>`.
-- gate: 20 functions x 64 seeded cases = 1280 differential cases, emitted Zig vs the interpreter,
-  PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte.
+- codegen: 50 functions from `tests/slice/addresses.json`, `zig fmt` clean.
+- coverage: 1,039 discovered functions, 126,876 instructions. Decoder 86.88%, emitter 78.10%,
+  57 functions fully emittable. Calls are now the gap: `bl` 7,673, then out-of-function `b`
+  1,407, `stfs`/`lfs`, float and VMX. 16,637 words are undecoded, mostly primary opcodes 31,
+  62, 04, 58 and 40. Reproduce with `zig build coverage -Dxex=<xex>`.
+- gate: 50 functions x 64 seeded cases = 3200 differential cases, emitted Zig vs the interpreter,
+  PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte. The slice includes
+  branches and loop bodies.
 - portability: x86_64-windows and aarch64-linux objects build.
 
 ## Bugs the differential found
 
+- `or`, `andi.`, `ori`, `oris` and `sraw` wrote the source register instead of the destination.
+- `lbzu`, `lwzu`, `stwu` did not update the base register.
 - `addis` read `r0` instead of literal zero and did not shift the immediate.
 - `addi`/`addis` sign-extended to 32 bits instead of 64.
 - `lbz`/`lbzu` loaded 4 bytes and reported a size-4 fault.
@@ -114,5 +117,5 @@ Done and verified on the real disc:
 
 ## Next
 
-P1: intra-function branches and calls first (`bc`, `bl`, `b` are 83% of the unsupported
-instructions), then float/VMX and the undecoded primary opcodes, then whole-image emission.
+P1: direct calls (`bl`) next, then float/VMX and the undecoded primary opcodes, then
+whole-image emission. Intra-function branches, loops and conditional returns are done.

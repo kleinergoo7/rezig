@@ -7,27 +7,52 @@ const std = @import("std");
 const decode = @import("rezig_ppc").decode;
 const ctx_mod = @import("rezig_runtime").ctx;
 
-pub const Error = error{ Unsupported, StepLimit, InvalidUpdate } || std.mem.Allocator.Error;
+pub const Error = error{ Unsupported, StepLimit, InvalidUpdate, BranchOutOfRange } || std.mem.Allocator.Error;
 
-pub const max_steps: u32 = 4096;
+pub const max_steps: u32 = 1_048_576;
 
 pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
     var steps: u32 = 0;
-    for (words) |word| {
+    var i: usize = 0;
+    while (i < words.len) {
+        if (ctx.budget != 0) {
+            ctx.budget -= 1;
+            if (ctx.budget == 0) return;
+        }
         steps += 1;
         if (steps > max_steps) return error.StepLimit;
 
-        const insn = decode.decode(word) catch return error.Unsupported;
+        const insn = decode.decode(words[i]) catch return error.Unsupported;
         switch (insn) {
             .blr => return,
+            .b => |f| {
+                if (f.absolute or f.link) return error.Unsupported;
+                i = try targetIndex(i, f.target, words.len);
+                continue;
+            },
+            .bc => |f| {
+                if (f.absolute or f.link or !ctx_mod.Ctx.supportedBo(f.bo)) return error.Unsupported;
+                if (ctx.branch(f.bo, f.bi)) {
+                    i = try targetIndex(i, f.target, words.len);
+                } else {
+                    i += 1;
+                }
+                continue;
+            },
+            .bclr => |f| {
+                if (f.absolute or f.link or !ctx_mod.Ctx.supportedBo(f.bo)) return error.Unsupported;
+                if (ctx.branch(f.bo, f.bi)) return;
+                i += 1;
+                continue;
+            },
             .nop => {},
             .addi => |f| ctx.gpr[f.rt] = base(ctx, f.ra) +% sext(f.imm),
             .addis => |f| ctx.gpr[f.rt] = base(ctx, f.ra) +% sext32(f.imm),
-            .ori => |f| ctx.gpr[f.rt] = ctx.gpr[f.ra] | f.imm,
-            .oris => |f| ctx.gpr[f.rt] = ctx.gpr[f.ra] | (@as(u64, f.imm) << 16),
+            .ori => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] | f.imm,
+            .oris => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] | (@as(u64, f.imm) << 16),
             .andi_dot => |f| {
-                const value = ctx.gpr[f.ra] & f.imm;
-                ctx.gpr[f.rt] = value;
+                const value = ctx.gpr[f.rt] & f.imm;
+                ctx.gpr[f.ra] = value;
                 ctx.setCr(0, value, 0, true);
             },
             .or_ => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] | ctx.gpr[f.rb],
@@ -35,7 +60,7 @@ pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
             .subf => |f| ctx.gpr[f.rt] = ctx.gpr[f.rb] -% ctx.gpr[f.ra],
             .mullw => |f| ctx.gpr[f.rt] = @truncate(@as(u32, @truncate(ctx.gpr[f.ra])) *% @as(u32, @truncate(ctx.gpr[f.rb]))),
             .srawi => |f| ctx.gpr[f.ra] = sraw32(ctx.gpr[f.rs], f.sh),
-            .sraw => |f| ctx.gpr[f.rt] = sraw32(ctx.gpr[f.ra], @truncate(ctx.gpr[f.rb] & 0x3f)),
+            .sraw => |f| ctx.gpr[f.ra] = sraw32(ctx.gpr[f.rt], @truncate(ctx.gpr[f.rb] & 0x3f)),
             .rlwinm => |f| ctx.gpr[f.ra] = std.math.rotl(u32, @truncate(ctx.gpr[f.rs]), f.sh) & mask32(f.mb, f.me),
             .mflr => |f| ctx.gpr[f.rt] = ctx.lr,
             .mtlr => |f| ctx.lr = @truncate(ctx.gpr[f.rt]),
@@ -67,7 +92,17 @@ pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
             .cmplwi => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], @as(u64, f.imm), false),
             else => return error.Unsupported,
         }
+        i += 1;
     }
+}
+
+/// Branch fields are byte offsets from the current instruction.
+fn targetIndex(current: usize, offset: u32, len: usize) Error!usize {
+    const delta: i32 = @bitCast(offset);
+    if (@rem(delta, 4) != 0) return error.BranchOutOfRange;
+    const next = @as(i64, @intCast(current)) + @divExact(@as(i64, delta), 4);
+    if (next < 0 or next >= @as(i64, @intCast(len))) return error.BranchOutOfRange;
+    return @intCast(next);
 }
 
 /// PowerPC shift amount is the low 6 bits; 32..63 fill with the sign bit.

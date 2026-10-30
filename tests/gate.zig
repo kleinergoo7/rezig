@@ -37,6 +37,8 @@ test "emitted functions match the interpreter" {
 
             var ctx_a = Ctx.init(.{ .base = page_base, .data = &page_a });
             var ctx_b = Ctx.init(.{ .base = page_base, .data = &page_b });
+            ctx_a.budget = 1_048_576;
+            ctx_b.budget = 1_048_576;
 
             var regs = seed ^ 0xA5A5_5A5A;
             for (&ctx_a.gpr) |*g| g.* = splitmix(&regs);
@@ -64,9 +66,13 @@ test "emitted functions match the interpreter" {
                 for (ctx_a.gpr, ctx_b.gpr, 0..) |expected, actual, i| {
                     if (expected != actual) {
                         std.debug.print("g_{X} case {d}: gpr[{d}] expected 0x{X} actual 0x{X}\n", .{ f.addr, case, i, expected, actual });
-                        return error.RegisterMismatch;
                     }
                 }
+                std.debug.print("  ctr {X}/{X} cr {X}/{X} lr {X}/{X} fault {s}@{X}/{X} vs {s}@{X}/{X}\n", .{
+                    ctx_a.ctr,                  ctx_b.ctr,        ctx_a.cr,         ctx_b.cr,                   ctx_a.lr,         ctx_b.lr,
+                    @tagName(ctx_a.fault.kind), ctx_a.fault.addr, ctx_a.fault.size, @tagName(ctx_b.fault.kind), ctx_b.fault.addr, ctx_b.fault.size,
+                });
+                return error.RegisterMismatch;
             }
             if (ctx_a.cr != ctx_b.cr) {
                 std.debug.print("g_{X} case {d}: cr expected 0x{X} actual 0x{X}\n", .{ f.addr, case, ctx_a.cr, ctx_b.cr });

@@ -19,6 +19,8 @@ pub const Ctx = struct {
     xer: u32,
     lr: u32,
     ctr: u32,
+    /// Instruction budget for generated code. `0` means unlimited.
+    budget: u32,
     mem: memory.Memory,
     fault: Fault,
 
@@ -31,6 +33,7 @@ pub const Ctx = struct {
             .xer = 0,
             .lr = 0,
             .ctr = 0,
+            .budget = 0,
             .mem = mem,
             .fault = .{},
         };
@@ -89,6 +92,43 @@ pub const Ctx = struct {
         const shift: u5 = @intCast((7 - @as(u32, crf)) * 4);
         const mask: u32 = @as(u32, 0xf) << shift;
         self.cr = (self.cr & ~mask) | (field << shift);
+    }
+
+    /// `bc` and `bclr` accept only the nine encodings compilers emit. The
+    /// predicate is spelled out per encoding so no bit is guessed.
+    pub fn supportedBo(bo: u5) bool {
+        return switch (bo) {
+            0, 2, 4, 8, 10, 12, 16, 18, 20 => true,
+            else => false,
+        };
+    }
+
+    /// Evaluates a `bc`/`bclr` condition and applies the CTR update.
+    /// Requires `supportedBo(bo)`.
+    pub fn branch(self: *Ctx, bo: u5, bi: u5) bool {
+        const test_ctr = switch (bo) {
+            4, 12, 20 => false,
+            else => true,
+        };
+        const test_cr = switch (bo) {
+            16, 18, 20 => false,
+            else => true,
+        };
+        const ctr_zero = bo == 2 or bo == 10 or bo == 18;
+        const cr_true = bo == 8 or bo == 10 or bo == 12;
+
+        if (test_ctr) {
+            self.ctr -%= 1;
+            if ((self.ctr == 0) != ctr_zero) return false;
+        }
+        if (!test_cr) return true;
+        const bit_set = self.crBit(bi) == 1;
+        return bit_set == cr_true;
+    }
+
+    /// CR bit 0 is the most significant bit of CR.
+    pub fn crBit(self: *const Ctx, bit: u5) u1 {
+        return @truncate(self.cr >> @intCast(31 - bit));
     }
 
     pub fn fetchInsn(self: *Ctx, addr: u32) u32 {
@@ -171,6 +211,33 @@ test "out of range store changes nothing" {
     for (buf) |b| try testing.expectEqual(@as(u8, 0xAA), b);
     try testing.expectEqual(FaultKind.store, ctx.fault.kind);
     try testing.expectEqual(@as(u8, 1), ctx.fault.size);
+}
+
+test "branch implements every supported BO encoding" {
+    var ctx = Ctx.init(.{ .base = 0, .data = &.{} });
+    ctx.cr = 0x8000_0000; // CR bit 0 set.
+
+    // bt / bf
+    try std.testing.expect(ctx.branch(12, 0));
+    try std.testing.expect(!ctx.branch(4, 0));
+    // b: always, no CTR change.
+    ctx.ctr = 0;
+    try std.testing.expect(ctx.branch(20, 0));
+    try std.testing.expectEqual(@as(u32, 0), ctx.ctr);
+    // bdnz then bdz.
+    ctx.ctr = 1;
+    try std.testing.expect(!ctx.branch(16, 0));
+    ctx.ctr = 1;
+    try std.testing.expect(ctx.branch(18, 0));
+    // CR set plus CTR.
+    ctx.ctr = 2;
+    try std.testing.expect(ctx.branch(8, 0));
+    ctx.ctr = 2;
+    try std.testing.expect(!ctx.branch(0, 0));
+    ctx.ctr = 1;
+    try std.testing.expect(ctx.branch(10, 0));
+    ctx.ctr = 1;
+    try std.testing.expect(!ctx.branch(2, 0));
 }
 
 test "setCr writes the requested field only" {

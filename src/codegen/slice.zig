@@ -4,7 +4,6 @@ const std = @import("std");
 const Io = std.Io;
 const analyze = @import("../ppc/analyze.zig");
 const emit = @import("emit.zig");
-const decode = @import("../ppc/decode.zig");
 
 pub const max_insns: usize = 40;
 
@@ -33,7 +32,7 @@ pub fn select(
         if (picked.items.len >= count) break;
         if (f.calls.len != 0) continue;
         if (f.words.len == 0 or f.words.len > max_insns) continue;
-        if (!supportedAll(f.words)) continue;
+        if (!emit.supportsAll(f.addr, f.words)) continue;
         const words = try allocator.dupe(u32, f.words);
         errdefer allocator.free(words);
         try picked.append(allocator, .{ .addr = f.addr, .words = words });
@@ -46,14 +45,6 @@ pub fn select(
 pub fn freeCandidates(allocator: std.mem.Allocator, list: []Candidate) void {
     for (list) |c| allocator.free(c.words);
     allocator.free(list);
-}
-
-fn supportedAll(words: []const u32) bool {
-    for (words) |word| {
-        const op = decode.decode(word) catch return false;
-        if (!emit.supports(op)) return false;
-    }
-    return true;
 }
 
 pub fn writeAddressList(
