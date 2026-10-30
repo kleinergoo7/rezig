@@ -58,9 +58,11 @@ Two facts this exposed:
 ## Whole-image budget
 
 - 1,000 emitted functions: 1.0 s to compile, 163 MB peak RSS, 16.8 MB Debug object.
-- Projected 24,000 functions: about 24 s, 4 GB RSS, 400 MB object, if scaling stays linear.
-- Chunked compilation is therefore viable. The limit today is coverage, not compiler cost:
-  call-closed selection tops out near 1,200 functions because call targets must be emittable too.
+- 14,282 functions as one file: 82.3 MB of Zig source, and the compiler rejects it
+  (spurious "expected signed integer type" errors past roughly 2,000 functions).
+- Chunked compilation is therefore not optional. The generated project needs one Zig module
+  per ~1,000 functions plus a small central dispatch module.
+- Call-closed selection tops out near 1,200 functions because call targets must be emittable too.
 
 ## Conversion
 

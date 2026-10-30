@@ -344,7 +344,12 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
         .lwzx => try indexedLoad(allocator, out, op.lwzx.rt, op.lwzx.ra, op.lwzx.rb, 4),
         .lbzx => try indexedLoad(allocator, out, op.lbzx.rt, op.lbzx.ra, op.lbzx.rb, 1),
         .stwx => try indexedStore(allocator, out, op.stwx.rt, op.stwx.ra, op.stwx.rb, 32),
-        .mulli => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i32, @truncate(ctx.gpr[{d}])) *% @as(i32, {d})))));\n", .{ op.mulli.rt, op.mulli.ra, op.mulli.imm }),
+        .mulli => {
+            try out.appendSlice(allocator, "    {\n");
+            try out.print(allocator, "        const _m: i32 = @as(i32, @truncate(ctx.gpr[{d}]));\n", .{op.mulli.ra});
+            try out.print(allocator, "        ctx.gpr[{d}] = @bitCast(@as(i64, _m *% @as(i32, {d})));\n", .{ op.mulli.rt, op.mulli.imm });
+            try out.appendSlice(allocator, "    }\n");
+        },
         .extsh => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i16, @truncate(ctx.gpr[{d}])))));\n", .{ op.extsh.ra, op.extsh.rt }),
         .extsb => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i8, @truncate(ctx.gpr[{d}])))));\n", .{ op.extsb.ra, op.extsb.rt }),
         .extsw => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i32, @truncate(ctx.gpr[{d}])))));\n", .{ op.extsw.ra, op.extsw.rt }),
@@ -578,7 +583,7 @@ fn indexedLoad(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, ra
     if (ra == 0) {
         try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}(@as(u32, @truncate(ctx.gpr[{d}]));\n", .{ rt, size * 8, rb });
     } else {
-        try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}]));\n", .{ rt, size * 8, ra, rb });
+        try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}])));\n", .{ rt, size * 8, ra, rb });
     }
 }
 
