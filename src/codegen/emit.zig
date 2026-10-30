@@ -80,7 +80,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
             .srawi => try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, @bitCast(@as(i32, @truncate(@as(i64, @bitCast(ctx.gpr[{d}])))) >> {d}));\n", .{
                 op.srawi.ra, op.srawi.rs, op.srawi.sh,
             }),
-            .rlwinm => try out.print(allocator, "    ctx.gpr[{d}] = rotl32(@truncate(ctx.gpr[{d}]), {d}) & 0x{X:0>8};\n", .{
+            .rlwinm => try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, std.math.rotl(u32, @truncate(ctx.gpr[{d}]), {d})) & 0x{X:0>8};\n", .{
                 op.rlwinm.ra, op.rlwinm.rs, op.rlwinm.sh, mask32(op.rlwinm.mb, op.rlwinm.me),
             }),
             .mflr => try mov(allocator, &out, op.mflr.rt, "lr"),

@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
     addExtractStep(b, exe, opts);
     addAnalyzeStep(b, exe, opts);
     addUnlockStep(b, opts);
+    addGateStep(b, exe, opts, target, optimize);
 }
 
 const Options = struct {
@@ -43,6 +44,8 @@ const Options = struct {
     tree: ?[]const u8,
     xex: ?[]const u8,
     xextool: ?[]const u8,
+    slice: ?[]const u8,
+    slice_list: ?[]const u8,
 };
 
 /// Build options are global, so every step reads from this one table.
@@ -54,6 +57,8 @@ fn readOptions(b: *std.Build) Options {
         .tree = b.option([]const u8, "tree", "extracted game tree"),
         .xex = b.option([]const u8, "xex", "path to a XEX file"),
         .xextool = b.option([]const u8, "xextool", "XexTool binary for the unlock step (defaults to PATH)"),
+        .slice = b.option([]const u8, "slice", "number of functions to select"),
+        .slice_list = b.option([]const u8, "slice-list", "frozen address list"),
     };
 }
 
@@ -92,6 +97,38 @@ fn addUnlockStep(b: *std.Build, opts: Options) void {
 
     const run = b.addSystemCommand(&.{ tool, "-e", "u", "-c", "u", "-o", out, xex });
     step.dependOn(&run.step);
+}
+
+/// Compile gate: regenerate the slice and type-check every emitted function against the real Ctx.
+fn addGateStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) void {
+    const step = b.step("gate", "Compile the emitted slice against the runtime");
+    if ((opts.tree == null) == (opts.xex == null)) {
+        return failStep(b, step, "exactly one of -Dtree=<dir> or -Dxex=<path>");
+    }
+
+    const codegen_run = b.addRunArtifact(exe);
+    codegen_run.addArgs(&.{ "codegen", "--out", "zig-out/gate" });
+    if (opts.tree) |value| codegen_run.addArgs(&.{ "--tree", value });
+    if (opts.xex) |value| codegen_run.addArgs(&.{ "--xex", value });
+    if (opts.key) |key| codegen_run.addArgs(&.{ "--key", key });
+    if (opts.slice) |n| codegen_run.addArgs(&.{ "--slice", n });
+    if (opts.slice_list) |path| codegen_run.addArgs(&.{ "--slice-list", path });
+
+    const slice_path = b.path("zig-out/gate/slice.zig");
+    const runtime_module = b.createModule(.{
+        .root_source_file = b.path("src/runtime/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const slice_module = b.createModule(.{
+        .root_source_file = slice_path,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "rezig_runtime", .module = runtime_module }},
+    });
+    const compiled = b.addObject(.{ .name = "slice", .root_module = slice_module });
+    compiled.step.dependOn(&codegen_run.step);
+    step.dependOn(&compiled.step);
 }
 
 fn failStep(b: *std.Build, step: *std.Build.Step, flag: []const u8) void {
