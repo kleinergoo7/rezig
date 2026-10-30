@@ -27,6 +27,9 @@ pub const FMForm = struct { frd: u8, fra: u8, frc: u8, frb: u8 };
 pub const VForm = struct { vd: u8, va: u8, vb: u8 };
 /// VMX load/store form.
 pub const VMemForm = struct { vd: u8, ra: u8, rb: u8 };
+pub const VPermForm = struct { vd: u8, va: u8, vb: u8, vc: u8 };
+pub const VmaddForm = struct { vd: u8, va: u8, vc: u8, vb: u8 };
+pub const VSplatForm = struct { vd: u8, simm: i5 };
 
 pub const Instruction = union(enum) {
     addi: DForm,
@@ -109,6 +112,14 @@ pub const Instruction = union(enum) {
     vxor: VForm,
     vaddfp: VForm,
     vor: VForm,
+    vcmpequb: VForm,
+    vcmpgtub: VForm,
+    vand: VForm,
+    vsubfp: VForm,
+    vrlw: VForm,
+    vperm: VPermForm,
+    vmaddfp: VmaddForm,
+    vspltisw: VSplatForm,
 };
 
 pub fn decode(word: u32) Error!Instruction {
@@ -274,8 +285,37 @@ fn decodeAForm(word: u32, primary: u8) Error!Instruction {
 }
 
 fn decodeVForm(word: u32) Error!Instruction {
+    const xo6 = word & 0x3f;
+    if (xo6 == 43) {
+        return .{ .vperm = .{
+            .vd = @truncate((word >> 21) & 0x1f),
+            .va = @truncate((word >> 16) & 0x1f),
+            .vb = @truncate((word >> 11) & 0x1f),
+            .vc = @truncate((word >> 6) & 0x1f),
+        } };
+    }
+    if (xo6 == 46) {
+        return .{ .vmaddfp = .{
+            .vd = @truncate((word >> 21) & 0x1f),
+            .va = @truncate((word >> 16) & 0x1f),
+            .vc = @truncate((word >> 11) & 0x1f),
+            .vb = @truncate((word >> 6) & 0x1f),
+        } };
+    }
+    if (xo6 == 12) {
+        return .{ .vspltisw = .{
+            .vd = @truncate((word >> 21) & 0x1f),
+            .simm = @truncate(@as(i5, @bitCast(@as(u5, @truncate((word >> 16) & 0x1f))))),
+        } };
+    }
     const xo = word & 0x7ff;
     return switch (xo) {
+        6 => .{ .vcmpequb = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
+        518 => .{ .vcmpgtub = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
+        1028 => .{ .vand = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
+        74 => .{ .vsubfp = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
+        132 => .{ .vrlw = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
+        10 => .{ .vaddfp = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
         1220 => .{ .vxor = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
         1156 => .{ .vor = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
         else => error.Unsupported,

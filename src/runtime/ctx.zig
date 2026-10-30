@@ -183,6 +183,85 @@ pub const Ctx = struct {
         return out;
     }
 
+    pub fn vcmpequb(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = @splat(0);
+        for (0..16) |i| {
+            if (a[i] == b[i]) out[i] = 0xFF;
+        }
+        return out;
+    }
+
+    pub fn vcmpgtub(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = @splat(0);
+        for (0..16) |i| {
+            if (a[i] > b[i]) out[i] = 0xFF;
+        }
+        return out;
+    }
+
+    pub fn vand(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        return @bitCast(@as(u128, @bitCast(a)) & @as(u128, @bitCast(b)));
+    }
+
+    pub fn vsubfp(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..4) |i| {
+            const at = i * 4;
+            const x: f32 = @bitCast(std.mem.readInt(u32, a[at..][0..4], .big));
+            const y: f32 = @bitCast(std.mem.readInt(u32, b[at..][0..4], .big));
+            std.mem.writeInt(u32, out[at..][0..4], @bitCast(x - y), .big);
+        }
+        return out;
+    }
+
+    pub fn vrlw(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..4) |i| {
+            const at = i * 4;
+            const x = std.mem.readInt(u32, a[at..][0..4], .big);
+            const sh: u5 = @truncate(std.mem.readInt(u32, b[at..][0..4], .big));
+            std.mem.writeInt(u32, out[at..][0..4], std.math.rotl(u32, x, sh), .big);
+        }
+        return out;
+    }
+
+    pub fn vmaddfp(_: *Ctx, a: [16]u8, c: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..4) |i| {
+            const at = i * 4;
+            const x: f32 = @bitCast(std.mem.readInt(u32, a[at..][0..4], .big));
+            const y: f32 = @bitCast(std.mem.readInt(u32, c[at..][0..4], .big));
+            const z: f32 = @bitCast(std.mem.readInt(u32, b[at..][0..4], .big));
+            std.mem.writeInt(u32, out[at..][0..4], @bitCast(@mulAdd(f32, x, y, z)), .big);
+        }
+        return out;
+    }
+
+    pub fn vspltisw(_: *Ctx, simm: i5) [16]u8 {
+        const v: u32 = @bitCast(@as(i32, simm));
+        var out: [16]u8 = undefined;
+        for (0..4) |i| std.mem.writeInt(u32, out[i * 4 ..][0..4], v, .big);
+        return out;
+    }
+
+    pub fn vperm(_: *Ctx, a: [16]u8, b: [16]u8, c: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..16) |i| {
+            const sel = c[i];
+            if (sel & 0x20 != 0) {
+                out[i] = 0;
+            } else {
+                const idx = sel & 0x1F;
+                if (idx < 16) {
+                    out[i] = if (sel & 0x10 != 0) b[idx] else a[idx];
+                } else {
+                    out[i] = 0;
+                }
+            }
+        }
+        return out;
+    }
+
     pub fn fetchInsn(self: *Ctx, addr: u32) u32 {
         return @intCast(self.load(u32, addr, .fetch));
     }
