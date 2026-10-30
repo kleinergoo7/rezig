@@ -4,7 +4,10 @@
     .fingerprint = 0x77478a10fd8bad0a,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
-        .xextool = .{ .path = "../xextool-zig" },
+        .xextool = .{
+            .url = "https://github.com/kleinergoo7/XexTool-Zig/archive/37f595e4b022a53b49f25785364f057473929f63.tar.gz",
+            .hash = "xextool-0.0.0-FSpYy32PDgD-mxDfEFTnZIz7kxg2veXJ8Ag8JwYb2yJs",
+        },
     },
     .paths = .{
         "build.zig",

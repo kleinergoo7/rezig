@@ -2,7 +2,7 @@
 
 ## Current phase
 
-P0 — clean extraction, then a 20-function Zig slice.
+P0 complete: clean extraction, whole-image measurement, and a 50-function differential slice.
 
 ## Done
 
@@ -34,9 +34,9 @@ GTA IV USA disc 1.0, no title update:
 First produced offline with XexTool 7.0. Now `rezig xex` produces the same bytes in-process:
 
 ```
-zig build xex -Dxex=data/gta4/default.xex -Dout=/tmp/rezig-default.xex -Dkey=<key>
-cmp /tmp/rezig-default.xex data/gta4/default.xex.unenc
-zig build analyze -Dxex=/tmp/rezig-default.xex
+zig build xex -Dxex=data/gta4/default.xex -Dout=<unlocked.xex> -Dkey=<key>
+cmp <unlocked.xex> data/gta4/default.xex.unenc
+zig build analyze -Dxex=<unlocked.xex>
 ```
 
 Output: version `0.0.0.5`, title `545407F2`, base `0x82000000`, entry `0x829A0860`,
