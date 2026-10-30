@@ -30,44 +30,71 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
-    addExtractStep(b, exe);
-    addAnalyzeStep(b, exe);
+    const opts = readOptions(b);
+    addExtractStep(b, exe, opts);
+    addAnalyzeStep(b, exe, opts);
+    addUnlockStep(b, opts);
 }
 
-fn addExtractStep(b: *std.Build, exe: *std.Build.Step.Compile) void {
+const Options = struct {
+    iso: ?[]const u8,
+    out: ?[]const u8,
+    key: ?[]const u8,
+    tree: ?[]const u8,
+    xex: ?[]const u8,
+    xextool: ?[]const u8,
+};
+
+/// Build options are global, so every step reads from this one table.
+fn readOptions(b: *std.Build) Options {
+    return .{
+        .iso = b.option([]const u8, "iso", "path to the Xbox 360 ISO"),
+        .out = b.option([]const u8, "out", "output path"),
+        .key = b.option([]const u8, "key", "path to a 16-byte XEX key"),
+        .tree = b.option([]const u8, "tree", "extracted game tree"),
+        .xex = b.option([]const u8, "xex", "path to a XEX file"),
+        .xextool = b.option([]const u8, "xextool", "XexTool binary for the unlock step (defaults to PATH)"),
+    };
+}
+
+fn addExtractStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) void {
     const step = b.step("extract", "Extract the disc tree from an ISO");
-    const iso = b.option([]const u8, "iso", "path to the Xbox 360 ISO") orelse
-        return failStep(b, step, "-Diso=<path>");
-    const out = b.option([]const u8, "out", "output game tree") orelse
-        return failStep(b, step, "-Dout=<dir>");
+    const iso = opts.iso orelse return failStep(b, step, "-Diso=<path>");
+    const out = opts.out orelse return failStep(b, step, "-Dout=<dir>");
 
     const run = b.addRunArtifact(exe);
     run.addArgs(&.{ "extract", "--iso", iso, "--out", out });
-    if (b.option([]const u8, "key", "path to a 16-byte XEX key")) |key| {
-        run.addArgs(&.{ "--key", key });
-    }
+    if (opts.key) |key| run.addArgs(&.{ "--key", key });
     step.dependOn(&run.step);
 }
 
-fn addAnalyzeStep(b: *std.Build, exe: *std.Build.Step.Compile) void {
+fn addAnalyzeStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) void {
     const step = b.step("analyze", "Report the XEX version, entry point and PE sections");
-    const tree = b.option([]const u8, "tree", "extracted game tree");
-    const xex = b.option([]const u8, "xex", "path to a XEX file");
-    if ((tree == null) == (xex == null)) {
+    if ((opts.tree == null) == (opts.xex == null)) {
         return failStep(b, step, "exactly one of -Dtree=<dir> or -Dxex=<path>");
     }
 
     const run = b.addRunArtifact(exe);
     run.addArgs(&.{"analyze"});
-    if (tree) |value| run.addArgs(&.{ "--tree", value });
-    if (xex) |value| run.addArgs(&.{ "--xex", value });
-    if (b.option([]const u8, "key", "path to a 16-byte XEX key")) |key| {
-        run.addArgs(&.{ "--key", key });
-    }
+    if (opts.tree) |value| run.addArgs(&.{ "--tree", value });
+    if (opts.xex) |value| run.addArgs(&.{ "--xex", value });
+    if (opts.key) |key| run.addArgs(&.{ "--key", key });
     step.dependOn(&run.step);
 }
 
-fn failStep(b: *std.Build, step: *std.Build.Step, comptime flag: []const u8) void {
-    const fail = b.addFail(b.fmt("zig build {s} needs -D{s}", .{ step.name, flag }));
+/// Temporary: XexTool is external, GPLv3, and never part of the product or of `zig build`.
+/// P1 replaces this step with `rezig xex`.
+fn addUnlockStep(b: *std.Build, opts: Options) void {
+    const step = b.step("unlock", "TEMPORARY: convert a retail XEX to an unencrypted copy with XexTool");
+    const xex = opts.xex orelse return failStep(b, step, "-Dxex=<path>");
+    const out = opts.out orelse b.fmt("{s}.unenc", .{xex});
+    const tool = opts.xextool orelse "XexTool";
+
+    const run = b.addSystemCommand(&.{ tool, "-e", "u", "-c", "u", "-o", out, xex });
+    step.dependOn(&run.step);
+}
+
+fn failStep(b: *std.Build, step: *std.Build.Step, flag: []const u8) void {
+    const fail = b.addFail(b.fmt("zig build {s} needs {s}", .{ step.name, flag }));
     step.dependOn(&fail.step);
 }

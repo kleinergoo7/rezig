@@ -37,8 +37,16 @@ GTA IV USA disc 1.0, no title update:
 ## Interims
 
 - Converting a retail XEX to an unlocked one for `--xex` is done offline with Team-Resurgent
-  XexTool (`XexTool -e u -c u -o default.unenc.xex default.xex`). GPLv3, never linked, built or
-  shipped here; its output is game data under `data/`. P1 replaces it with `rezig xex`.
+  XexTool. GPLv3, never linked, built or shipped here; its output is game data under `data/`.
+  P1 replaces it with `rezig xex`.
+
+  ```
+  zig build unlock -Dxex=data/gta4/default.xex -Dxextool=/path/to/XexTool
+  zig build analyze -Dxex=data/gta4/default.xex.unenc
+  ```
+
+  The step is a thin wrapper around the external binary and is never part of `zig build` or
+  `zig build test`. Without `-Dxextool` it looks for `XexTool` on `PATH`.
 
 ## Toolchain notes
 
