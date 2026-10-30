@@ -79,3 +79,72 @@ pub fn build(allocator: std.mem.Allocator) ![]u8 {
 
     return bytes;
 }
+
+pub const pe_image_base: u32 = 0x82000000;
+pub const pe_image_size: u32 = 0x2000;
+pub const pe_entry_rva: u32 = 0x1000;
+
+pub fn buildPeImage(allocator: std.mem.Allocator) ![]u8 {
+    const bytes = try allocator.alloc(u8, pe_image_size);
+    errdefer allocator.free(bytes);
+    @memset(bytes, 0);
+
+    bytes[0] = 'M';
+    bytes[1] = 'Z';
+    std.mem.writeInt(u32, bytes[0x3C..][0..4], 0x80, .little);
+
+    const nt = 0x80;
+    @memcpy(bytes[nt..][0..4], "PE\x00\x00");
+    const file_header = bytes[nt + 4 ..];
+    std.mem.writeInt(u16, file_header[0..2], 0x01F2, .little);
+    std.mem.writeInt(u16, file_header[2..4], 2, .little);
+    std.mem.writeInt(u16, file_header[16..18], 0xE0, .little);
+    std.mem.writeInt(u16, file_header[18..20], 0x0102, .little);
+
+    const optional = nt + 24;
+    std.mem.writeInt(u16, bytes[optional..][0..2], 0x010B, .little);
+    std.mem.writeInt(u32, bytes[optional + 16 ..][0..4], pe_entry_rva, .little);
+    std.mem.writeInt(u32, bytes[optional + 28 ..][0..4], pe_image_base, .little);
+    std.mem.writeInt(u32, bytes[optional + 56 ..][0..4], pe_image_size, .little);
+
+    const table = optional + 0xE0;
+    writeSection(bytes[table..][0..40], ".text", 0x800, pe_entry_rva, 0x60000020);
+    writeSection(bytes[table + 40 ..][0..40], ".data", 0x400, 0x1800, 0xC0000040);
+
+    @memset(bytes[pe_entry_rva..][0..0x800], 0x60);
+    return bytes;
+}
+
+fn writeSection(dest: []u8, name: []const u8, size: u32, address: u32, characteristics: u32) void {
+    @memcpy(dest[0..name.len], name);
+    std.mem.writeInt(u32, dest[8..12], size, .little);
+    std.mem.writeInt(u32, dest[12..16], address, .little);
+    std.mem.writeInt(u32, dest[16..20], size, .little);
+    std.mem.writeInt(u32, dest[20..24], address, .little);
+    std.mem.writeInt(u32, dest[36..40], characteristics, .little);
+}
+
+pub fn buildFull(allocator: std.mem.Allocator, encryption: u16, compression: u16) ![]u8 {
+    const pe = try buildPeImage(allocator);
+    defer allocator.free(pe);
+
+    const head = try build(allocator);
+    defer allocator.free(head);
+
+    const bytes = try allocator.alloc(u8, header_size + pe.len);
+    errdefer allocator.free(bytes);
+    @memcpy(bytes[0..header_size], head);
+    @memcpy(bytes[header_size..], pe);
+
+    std.mem.writeInt(u32, bytes[off.security + 4 ..][0..4], pe_image_size, .big);
+
+    const ff = bytes[off.file_format..];
+    std.mem.writeInt(u16, ff[4..6], encryption, .big);
+    std.mem.writeInt(u16, ff[6..8], compression, .big);
+    std.mem.writeInt(u32, ff[8..12], pe_image_size / 2, .big);
+    std.mem.writeInt(u32, ff[12..16], 0, .big);
+    std.mem.writeInt(u32, ff[16..20], pe_image_size / 2, .big);
+    std.mem.writeInt(u32, ff[20..24], 0, .big);
+
+    return bytes;
+}
