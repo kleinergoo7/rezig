@@ -5,4 +5,5 @@ test {
     _ = @import("src/cli/parse.zig");
     _ = @import("src/disc/root.zig");
     _ = @import("src/xex/root.zig");
+    _ = @import("src/ppc/root.zig");
 }
