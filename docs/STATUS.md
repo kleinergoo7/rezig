@@ -85,14 +85,28 @@ Done and verified on the real disc:
 - ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
 - codegen: 20 functions from `tests/slice/addresses.json`, `zig fmt` clean.
-- gate (compile half): the 20 emitted functions type-check against the real `Ctx`.
+- gate: 20 functions x 64 seeded cases = 1280 differential cases, emitted Zig vs the interpreter,
+  PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte.
 - portability: x86_64-windows and aarch64-linux objects build.
+
+## Bugs the differential found
+
+- `addis` read `r0` instead of literal zero and did not shift the immediate.
+- `addi`/`addis` sign-extended to 32 bits instead of 64.
+- `lbz`/`lbzu` loaded 4 bytes and reported a size-4 fault.
+- Load/store immediates were emitted unsigned, turning `-4` into `+65532`.
+
+## Limits
+
+- The interpreter shares the decoder with the emitter, so the gate proves lowering, not decoding.
+  Decoding rests on 44 instructions assembled with Zig and checked with `llvm-objdump`.
+- Neither side is guest truth. That still needs an independent CPU (Xenia, or Unicorn for single
+  instructions).
 
 ## Remaining for P0
 
-- Differential gate: needs `tests/oracle/*.json` (20 x 64 cases) from the offline rexglue oracle.
-  The comparator and trace schema are specified in the plan; the harness is external.
-- `build.zig` still has near-duplicate step helpers; `analyze` and `unlock` share options now.
+- Guest-truth traces, if wanted.
+- `build.zig` still has near-duplicate step helpers.
 
 ## Next
 
