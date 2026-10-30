@@ -50,7 +50,11 @@ pub fn run(gpa: std.mem.Allocator, io: Io, args: []const [:0]const u8) !u8 {
         },
         .extract => |opts| {
             const summary = extract.run(gpa, io, opts) catch |e| {
-                try err.print("rezig extract: {s}: iso '{s}', out '{s}'\n", .{ @errorName(e), opts.iso, opts.out });
+                try err.print("rezig extract: {s}: iso '{s}', out '{s}'", .{ @errorName(e), opts.iso, opts.out });
+                if (e == error.BadKeySize) {
+                    if (opts.key) |key_path| try keySizeHint(io, key_path, err);
+                }
+                try err.writeAll("\n");
                 try err.flush();
                 return 1;
             };
@@ -59,7 +63,9 @@ pub fn run(gpa: std.mem.Allocator, io: Io, args: []const [:0]const u8) !u8 {
         },
         .analyze => |opts| {
             analyze.run(gpa, io, opts) catch |e| {
-                try err.print("rezig analyze: {s}: tree '{s}', key '{s}'\n", .{ @errorName(e), opts.tree, opts.key });
+                try err.print("rezig analyze: {s}: tree '{s}', key '{s}'", .{ @errorName(e), opts.tree, opts.key });
+                if (e == error.BadKeySize) try keySizeHint(io, opts.key, err);
+                try err.writeAll("\n");
                 try err.flush();
                 return 1;
             };
@@ -71,6 +77,11 @@ pub fn run(gpa: std.mem.Allocator, io: Io, args: []const [:0]const u8) !u8 {
             return 1;
         },
     }
+}
+
+fn keySizeHint(io: Io, path: []const u8, writer: anytype) !void {
+    const st = Io.Dir.cwd().statFile(io, path, .{}) catch return;
+    try writer.print(" (key file is {d} bytes, expected 16)", .{st.size});
 }
 
 fn printExtractSummary(io: Io, opts: parse.Extract, summary: extract.Summary) !void {

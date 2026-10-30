@@ -43,16 +43,16 @@ const DirWriter = struct {
     fn add(self: *DirWriter, name: []const u8, sector: u32, size: u32, attr: u8) void {
         const off = self.cursor;
         const rec = std.mem.alignForward(u32, 14 + @as(u32, @intCast(name.len)), 4);
-        std.mem.writeInt(u16, self.table[off..][0..2], 0xffff, .little);
-        std.mem.writeInt(u16, self.table[off + 2 ..][0..2], 0xffff, .little);
+        std.mem.writeInt(u16, self.table[off..][0..2], 0, .little);
+        std.mem.writeInt(u16, self.table[off + 2 ..][0..2], 0, .little);
         std.mem.writeInt(u32, self.table[off + 4 ..][0..4], sector, .little);
         std.mem.writeInt(u32, self.table[off + 8 ..][0..4], size, .little);
         self.table[off + 12] = attr;
         self.table[off + 13] = @intCast(name.len);
         @memcpy(self.table[off + 14 ..][0..name.len], name);
         @memset(self.table[off + 14 + name.len ..][0 .. rec - 14 - name.len], 0);
-        // Directory tables are one sector, so a record offset always fits u16.
-        if (self.prev) |p| std.mem.writeInt(u16, self.table[p + 2 ..][0..2], @intCast(off), .little);
+        // Links are byte offsets divided by 4; records start on 4-byte boundaries.
+        if (self.prev) |p| std.mem.writeInt(u16, self.table[p + 2 ..][0..2], @intCast(off / 4), .little);
         self.prev = off;
         self.cursor += rec;
     }
@@ -67,7 +67,7 @@ pub fn build(allocator: std.mem.Allocator, base: u64) !Image {
     @memcpy(vd[0..magic.len], magic);
     std.mem.writeInt(u32, vd[0x14..][0..4], ROOT_SECTOR, .little);
     std.mem.writeInt(u32, vd[0x18..][0..4], SECTOR, .little);
-    std.mem.writeInt(u32, vd[0x1C..][0..4], @intCast(bytes.len), .little);
+    std.mem.writeInt(u32, vd[0x1C..][0..4], 0, .little);
 
     var root = DirWriter{ .table = bytes[ROOT_SECTOR * SECTOR ..][0..SECTOR] };
     root.add("data", DATA_SECTOR, SECTOR, 0x10);
@@ -94,7 +94,7 @@ pub fn buildDeep(allocator: std.mem.Allocator, base: u64, depth: u32) !Image {
     @memcpy(vd[0..magic.len], magic);
     std.mem.writeInt(u32, vd[0x14..][0..4], ROOT_SECTOR, .little);
     std.mem.writeInt(u32, vd[0x18..][0..4], SECTOR, .little);
-    std.mem.writeInt(u32, vd[0x1C..][0..4], @intCast(bytes.len), .little);
+    std.mem.writeInt(u32, vd[0x1C..][0..4], 0, .little);
 
     var root = DirWriter{ .table = bytes[ROOT_SECTOR * SECTOR ..][0..SECTOR] };
     root.add("d0", ROOT_SECTOR + 1, SECTOR, 0x10);
@@ -133,7 +133,7 @@ pub fn buildWithXex(allocator: std.mem.Allocator, base: u64, xex: []const u8) !I
     @memcpy(vd[0..magic.len], magic);
     std.mem.writeInt(u32, vd[0x14..][0..4], ROOT_SECTOR, .little);
     std.mem.writeInt(u32, vd[0x18..][0..4], SECTOR, .little);
-    std.mem.writeInt(u32, vd[0x1C..][0..4], @intCast(bytes.len), .little);
+    std.mem.writeInt(u32, vd[0x1C..][0..4], 0, .little);
 
     var root = DirWriter{ .table = bytes[ROOT_SECTOR * SECTOR ..][0..SECTOR] };
     root.add("data", DATA_SECTOR, SECTOR, 0x10);

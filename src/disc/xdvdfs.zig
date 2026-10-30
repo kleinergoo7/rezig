@@ -11,6 +11,8 @@ pub const VOLUME_SECTOR: u32 = 32;
 pub const XGD2_BASE: u64 = 0xFD90000;
 pub const MAGIC = "MICROSOFT*XBOX*MEDIA";
 pub const NONE: u16 = 0xffff;
+/// Directory links are offsets in 4-byte units. Zero means "no child".
+pub const LINK_UNIT: u32 = 4;
 pub const MAX_DEPTH: u8 = 32;
 pub const MAX_ENTRIES: u32 = 1_000_000;
 pub const MAX_PATH: usize = 1024;
@@ -39,9 +41,10 @@ pub const Entry = struct {
 
 pub const Volume = struct {
     base: u64,
-    image_size: u32,
     root_sector: u32,
     root_size: u32,
+    /// Last valid byte offset in the source; bounds come from the source, not a header field.
+    end: u64,
 
     pub fn walk(
         self: *const Volume,
@@ -66,8 +69,8 @@ pub const Volume = struct {
     }
 
     fn checkRange(self: *const Volume, sector: u32, size: u32) Error!void {
-        const start = @as(u64, sector) * SECTOR;
-        if (start + size > self.image_size) return error.EntryOutOfRange;
+        const start = self.base + @as(u64, sector) * SECTOR;
+        if (start > self.end or size > self.end - start) return error.EntryOutOfRange;
     }
 
     pub fn readFile(
@@ -113,18 +116,16 @@ pub fn open(comptime S: type, src: *S, io: Io) Error!Volume {
 
     const root_sector = std.mem.readInt(u32, vd[0x14..][0..4], .little);
     const root_size = std.mem.readInt(u32, vd[0x18..][0..4], .little);
-    const image_size = std.mem.readInt(u32, vd[0x1C..][0..4], .little);
 
     if (root_sector == 0 or root_size == 0) return error.NotXdvdfs;
     if (root_size % SECTOR != 0) return error.NotXdvdfs;
     if (root_size > MAX_DIR_BYTES) return error.EntryOutOfRange;
-    if (image_size > src.size - base) return error.Truncated;
 
     const vol = Volume{
         .base = base,
-        .image_size = image_size,
         .root_sector = root_sector,
         .root_size = root_size,
+        .end = src.size,
     };
     try vol.checkRange(root_sector, root_size);
     return vol;
@@ -186,23 +187,23 @@ fn Walker(comptime S: type) type {
             depth: u8,
             seen_nodes: *std.AutoHashMapUnmanaged(u32, void),
         ) Error!void {
-            var offset = start;
-            while (offset != NONE) {
-                if (@as(usize, offset) + 14 > table.len) return error.Truncated;
+            var offset: ?u32 = start;
+            while (offset) |off| {
+                if (@as(usize, off) + 14 > table.len) return error.Truncated;
 
-                const gop = try seen_nodes.getOrPut(self.allocator, offset);
+                const gop = try seen_nodes.getOrPut(self.allocator, off);
                 if (gop.found_existing) return error.DirectoryCycle;
 
-                const rec = table[offset..];
-                const left = std.mem.readInt(u16, rec[0..2], .little);
-                const right = std.mem.readInt(u16, rec[2..4], .little);
+                const rec = table[off..];
+                const left = linkOffset(std.mem.readInt(u16, rec[0..2], .little));
+                const right = linkOffset(std.mem.readInt(u16, rec[2..4], .little));
                 const sector = std.mem.readInt(u32, rec[4..8], .little);
                 const size = std.mem.readInt(u32, rec[8..12], .little);
                 const attr = rec[12];
                 const name_len = rec[13];
 
                 if (name_len == 0) return error.NotXdvdfs;
-                if (@as(usize, offset) + 14 + name_len > table.len) return error.Truncated;
+                if (@as(usize, off) + 14 + name_len > table.len) return error.Truncated;
                 const name = rec[14..][0..name_len];
 
                 if (attr & 0x10 != 0) {
@@ -215,7 +216,7 @@ fn Walker(comptime S: type) type {
                     try self.addFile(prefix, name, sector, size);
                 }
 
-                if (left != NONE) try self.walkNode(table, left, prefix, depth, seen_nodes);
+                if (left) |child| try self.walkNode(table, child, prefix, depth, seen_nodes);
                 offset = right;
             }
         }
@@ -314,7 +315,7 @@ test "readFile returns exact bytes" {
     for (bytes, 0..) |b, i| try testing.expectEqual(@as(u8, @truncate(3 +% @as(u8, @truncate(i)))), b);
 }
 
-test "entry past the image is rejected" {
+test "entry past the source is rejected" {
     const io = testIo();
     var img = try iso_writer.build(testing.allocator, 0);
     defer img.deinit(testing.allocator);
@@ -360,4 +361,9 @@ fn find(entries: []const Entry, path: []const u8) ?Entry {
         if (std.mem.eql(u8, e.path, path)) return e;
     }
     return null;
+}
+
+fn linkOffset(units: u16) ?u32 {
+    if (units == 0 or units == NONE) return null;
+    return @as(u32, units) * LINK_UNIT;
 }
