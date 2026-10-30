@@ -146,6 +146,43 @@ pub const Ctx = struct {
         return @truncate(self.cr >> @intCast(31 - bit));
     }
 
+    pub fn loadVmx(self: *Ctx, addr: u32) [16]u8 {
+        if (!self.mem.contains(addr, 16)) {
+            self.recordFault(.load, addr, 16);
+            return @splat(0);
+        }
+        const offset = addr - self.mem.base;
+        return self.mem.data[offset..][0..16].*;
+    }
+
+    pub fn storeVmx(self: *Ctx, addr: u32, value: [16]u8) void {
+        if (!self.mem.contains(addr, 16)) {
+            self.recordFault(.store, addr, 16);
+            return;
+        }
+        const offset = addr - self.mem.base;
+        @memcpy(self.mem.data[offset..][0..16], &value);
+    }
+
+    pub fn vor(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        return @bitCast(@as(u128, @bitCast(a)) | @as(u128, @bitCast(b)));
+    }
+
+    pub fn vxor(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        return @bitCast(@as(u128, @bitCast(a)) ^ @as(u128, @bitCast(b)));
+    }
+
+    pub fn vaddfp(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..4) |i| {
+            const at = i * 4;
+            const x: f32 = @bitCast(std.mem.readInt(u32, a[at..][0..4], .big));
+            const y: f32 = @bitCast(std.mem.readInt(u32, b[at..][0..4], .big));
+            std.mem.writeInt(u32, out[at..][0..4], @bitCast(x + y), .big);
+        }
+        return out;
+    }
+
     pub fn fetchInsn(self: *Ctx, addr: u32) u32 {
         return @intCast(self.load(u32, addr, .fetch));
     }
@@ -286,4 +323,18 @@ test "fetch faults are recorded as fetch" {
 
     _ = ctx.fetchInsn(0x2000);
     try testing.expectEqual(FaultKind.fetch, ctx.fault.kind);
+}
+
+test "vaddfp adds four big-endian f32 lanes" {
+    var a: [16]u8 = undefined;
+    var b: [16]u8 = undefined;
+    for (0..4) |i| {
+        std.mem.writeInt(u32, a[i * 4 ..][0..4], @bitCast(@as(f32, @floatFromInt(i + 1))), .big);
+        std.mem.writeInt(u32, b[i * 4 ..][0..4], @bitCast(@as(f32, 1.0)), .big);
+    }
+    const out = Ctx.vaddfp(undefined, a, b);
+    for (0..4) |i| {
+        const v: f32 = @bitCast(std.mem.readInt(u32, out[i * 4 ..][0..4], .big));
+        try std.testing.expectEqual(@as(f32, @floatFromInt(i + 2)), v);
+    }
 }

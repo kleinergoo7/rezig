@@ -94,18 +94,20 @@ Done and verified on the real disc:
 - codegen: 50 functions from `tests/slice/addresses.json`, `zig fmt` clean.
 - coverage, now seeded from `.pdata`: 24,513 function starts, 28,038 discovered functions,
   1,800,711 unique instructions = 76.73% of `.text` (2,346,754 words). 83.77% of instruction
-  instances decode, 83.56% emit, 2,913 functions are fully emittable. Single-precision float is
-  done. Remaining gaps are VMX (`vor` 5,131, `vaddfp` 2,263, `lvx`, `stvx`) and 581,975 undecoded
-  instruction instances, mostly primary opcodes 31, 62, 04, 58 and 40. Reproduce with
+  instances decode and emit, 2,915 functions are fully emittable. Integer, single-precision
+  float, branches, calls, tail calls and the five decoded VMX ops (`vor`, `vxor`, `vaddfp`,
+  `lvx`, `stvx`) are lowered. The remaining limit is decoding: 581,975 instruction instances,
+  mostly primary opcodes 31, 62, 04, 58 and 40. Reproduce with
   `zig build coverage -Dxex=<xex>`.
 - gate: 50 functions x 64 seeded cases = 3200 differential cases, emitted Zig vs the interpreter,
   PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte. The slice includes
   branches, loop bodies and nine `bl` call sites; call targets are pulled in by closure.
 - tail calls: `b` and conditional `bc` outside the function dispatch and return to the caller.
   A synthetic interpreter test pins the semantics.
-- float: emitter and interpreter agree on `fpr` in unit tests, but no real function that uses
-  float is fully supported yet: every candidate also contains undecoded instructions. The gate
-  therefore exercises float lowering only through its golden test, not through GTA IV code.
+- float and VMX: emitter and interpreter agree on `fpr`/`vmx` in unit tests, but no real
+  function that uses either is fully supported yet: every candidate also contains undecoded
+  instructions. The gate therefore exercises them through unit and golden tests, not GTA IV
+  code.
 - portability: x86_64-windows and aarch64-linux objects build.
 
 ## Bugs the differential found

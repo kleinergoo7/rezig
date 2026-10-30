@@ -43,7 +43,7 @@ Verified on a real GTA IV USA disc 1.0:
 | Function discovery | 24,513 `.pdata` starts, 28,038 discovered functions |
 | Instruction coverage | 1,800,711 unique instructions = 76.73% of `.text` |
 | Decode / emit | 83.77% / 83.56% of discovered instruction instances |
-| Emitter | integer, single-precision float, branches, loops, direct and tail calls |
+| Emitter | integer, single-precision float, VMX subset, branches, loops, direct and tail calls |
 | Differential gate | 50 functions x 64 cases = 3,200 comparisons, all pass |
 | Portability | compiles for x86_64-windows and aarch64-linux |
 
@@ -55,7 +55,8 @@ compares GPRs, FPRs, CR, XER, LR, CTR, fault kind/address/size, and every byte o
 - **Kernel surface.** No `xboxkrnl`/XAM HLE, no threads, events, TLS, file I/O or timing.
 - **GPU.** No Xenos command processor, shader translator, textures or Vulkan backend.
 - **Audio, input, saves.** None.
-- **VMX/AltiVec.** Refused by the emitter; 5,131 `vor` and 2,263 `vaddfp` instances remain.
+- **VMX/AltiVec breadth.** Only `vor`, `vxor`, `vaddfp`, `lvx` and `stvx` are decoded and
+  emitted; the rest of the vector ISA is missing.
 - **Decoder gaps.** 581,975 instruction instances, mostly primary opcodes 31, 62, 04, 58, 40.
 - **Whole-image emission.** The call-closed slice tops out near 1,200 functions today.
 - **Indirect branches.** `bctr` and non-return `bclr` are not lowered.

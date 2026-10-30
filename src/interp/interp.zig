@@ -135,9 +135,13 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .fmul => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] * ctx.fpr[f.frb],
             .fdiv => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] / ctx.fpr[f.frb],
             .fcmpu => |f| ctx.setCrFloat(f.crf, ctx.fpr[f.fra], ctx.fpr[f.frb]),
+            .lvx => |f| ctx.vmx[f.vd] = ctx.loadVmx(vaddr(ctx, f.ra, f.rb)),
+            .stvx => |f| ctx.storeVmx(vaddr(ctx, f.ra, f.rb), ctx.vmx[f.vd]),
+            .vor => |f| ctx.vmx[f.vd] = ctx.vor(ctx.vmx[f.va], ctx.vmx[f.vb]),
+            .vxor => |f| ctx.vmx[f.vd] = ctx.vxor(ctx.vmx[f.va], ctx.vmx[f.vb]),
+            .vaddfp => |f| ctx.vmx[f.vd] = ctx.vaddfp(ctx.vmx[f.va], ctx.vmx[f.vb]),
             .cmpwi => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], @bitCast(@as(i64, f.imm)), true),
             .cmplwi => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], @as(u64, f.imm), false),
-            else => return error.Unsupported,
         }
         i += 1;
     }
@@ -168,6 +172,10 @@ fn sraw32(value: u64, shift: u6) u64 {
 
 fn base(ctx: *const ctx_mod.Ctx, ra: u8) u64 {
     return if (ra == 0) 0 else ctx.gpr[ra];
+}
+
+fn vaddr(ctx: *const ctx_mod.Ctx, ra: u8, rb: u8) u32 {
+    return @truncate(base(ctx, ra) +% ctx.gpr[rb]);
 }
 
 fn addr(ctx: *const ctx_mod.Ctx, ra: u8, imm: i16) u32 {

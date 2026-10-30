@@ -86,6 +86,13 @@ test "emitted functions match the interpreter" {
                     return error.RegisterMismatch;
                 }
             }
+            if (!std.mem.eql(u8, std.mem.asBytes(&ctx_a.vmx), std.mem.asBytes(&ctx_b.vmx))) {
+                for (ctx_a.vmx, ctx_b.vmx, 0..) |expected, actual, i| {
+                    if (std.mem.eql(u8, &expected, &actual)) continue;
+                    std.debug.print("g_{X} case {d}: vmx[{d}] expected {x} actual {x}\n", .{ f.addr, case, i, expected, actual });
+                    return error.RegisterMismatch;
+                }
+            }
             if (ctx_a.cr != ctx_b.cr) {
                 std.debug.print("g_{X} case {d}: cr expected 0x{X} actual 0x{X}\n", .{ f.addr, case, ctx_a.cr, ctx_b.cr });
                 return error.RegisterMismatch;

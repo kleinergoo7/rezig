@@ -39,6 +39,11 @@ pub fn supports(op: insn) bool {
         .rlwinm,
         .lfs,
         .stfs,
+        .lvx,
+        .stvx,
+        .vor,
+        .vxor,
+        .vaddfp,
         .fadd,
         .fsub,
         .fmul,
@@ -218,6 +223,23 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
         .stw, .stb => try store(allocator, out, op, false),
         .stwu => try store(allocator, out, op, true),
         .lfs => try fLoad(allocator, out, op.lfs.frd, op.lfs.ra, op.lfs.imm),
+        .lvx => try vmem(allocator, out, op.lvx, true),
+        .stvx => try vmem(allocator, out, op.stvx, false),
+        .vor, .vxor, .vaddfp => {
+            const vd, const va, const vb = switch (op) {
+                .vor => |f| .{ f.vd, f.va, f.vb },
+                .vxor => |f| .{ f.vd, f.va, f.vb },
+                .vaddfp => |f| .{ f.vd, f.va, f.vb },
+                else => unreachable,
+            };
+            const name = switch (op) {
+                .vor => "vor",
+                .vxor => "vxor",
+                .vaddfp => "vaddfp",
+                else => unreachable,
+            };
+            try out.print(allocator, "    ctx.vmx[{d}] = ctx.{s}(ctx.vmx[{d}], ctx.vmx[{d}]);\n", .{ vd, name, va, vb });
+        },
         .stfs => try fStore(allocator, out, op.stfs.frd, op.stfs.ra, op.stfs.imm),
         .fadd => try fBinop(allocator, out, "+", op.fadd.frd, op.fadd.fra, op.fadd.frb),
         .fsub => try fBinop(allocator, out, "-", op.fsub.frd, op.fsub.fra, op.fsub.frb),
@@ -341,6 +363,21 @@ fn printAddr(
     try out.print(allocator, "        ctx.gpr[{d}] = ea;\n    }}\n", .{ra});
 }
 
+fn vmem(allocator: std.mem.Allocator, out: *std.ArrayList(u8), form: ppc.decode.VMemForm, is_load: bool) !void {
+    try out.appendSlice(allocator, "    {\n");
+    if (form.ra == 0) {
+        try out.print(allocator, "        const ea: u32 = @as(u32, @truncate(ctx.gpr[{d}]));\n", .{form.rb});
+    } else {
+        try out.print(allocator, "        const ea: u32 = @as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}]));\n", .{ form.ra, form.rb });
+    }
+    if (is_load) {
+        try out.print(allocator, "        ctx.vmx[{d}] = ctx.loadVmx(ea);\n", .{form.vd});
+    } else {
+        try out.print(allocator, "        ctx.storeVmx(ea, ctx.vmx[{d}]);\n", .{form.vd});
+    }
+    try out.appendSlice(allocator, "    }\n");
+}
+
 fn fBinop(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: []const u8, frd: u8, fra: u8, frb: u8) !void {
     try out.print(allocator, "    ctx.fpr[{d}] = ctx.fpr[{d}] {s} ctx.fpr[{d}];\n", .{ frd, fra, op, frb });
 }
@@ -399,8 +436,15 @@ test "golden function" {
     , text);
 }
 
-test "vmx is refused" {
+test "vmx bitwise ops lower to the vector helpers" {
     const words = [_]u32{ 0x10221cc4, 0x4e800020 };
+    const text = try function(testing.allocator, &words, .{ .addr = 0 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "ctx.vmx[1] = ctx.vxor(ctx.vmx[2], ctx.vmx[3]);") != null);
+}
+
+test "absolute linked branches are refused" {
+    const words = [_]u32{ 0x42000003, 0x4e800020 };
     try testing.expectError(error.UnsupportedOpcode, function(testing.allocator, &words, .{ .addr = 0 }));
 }
 

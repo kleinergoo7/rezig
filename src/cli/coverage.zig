@@ -226,7 +226,7 @@ fn percent100(part: u64, whole: u64) u64 {
 const testing = std.testing;
 
 test "collect separates emitted instructions from decoder gaps" {
-    var mixed = [_]u32{ 0x60000000, 0x10221cc4, 0x00000000, 0x4e800020 };
+    var mixed = [_]u32{ 0x60000000, 0x42000003, 0x00000000, 0x4e800020 };
     var clean = [_]u32{ 0x60000000, 0x4e800020 };
     var no_calls = [_]u32{};
     const functions = [_]ppc_analyze.Function{
@@ -245,6 +245,6 @@ test "collect separates emitted instructions from decoder gaps" {
     try testing.expectEqual(@as(u64, 1), summary.undecoded[0]);
     try testing.expectEqual(@as(usize, 1), summary.fully_emittable);
     try testing.expectEqual(@as(usize, 1), summary.missing.len);
-    try testing.expectEqualStrings("vxor", summary.missing[0].name);
+    try testing.expectEqualStrings("bc", summary.missing[0].name);
     try testing.expectEqual(@as(u64, 1), summary.missing[0].count);
 }
