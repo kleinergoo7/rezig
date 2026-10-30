@@ -11,7 +11,16 @@ pub const Error = error{ Unsupported, StepLimit, InvalidUpdate, BranchOutOfRange
 
 pub const max_steps: u32 = 1_048_576;
 
+pub const Entry = struct { addr: u32, words: []const u32 };
+pub const Table = []const Entry;
+
 pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
+    return runTable(ctx, 0, words, &.{});
+}
+
+/// Runs `words` starting at `start`, resolving `bl` through `table`. Recursion
+/// mirrors the generated code's Zig call stack.
+pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: Table) Error!void {
     var steps: u32 = 0;
     var i: usize = 0;
     while (i < words.len) {
@@ -23,8 +32,19 @@ pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
         if (steps > max_steps) return error.StepLimit;
 
         const insn = decode.decode(words[i]) catch return error.Unsupported;
+        const cur = entry_addr +% @as(u32, @intCast(i)) * 4;
         switch (insn) {
             .blr => return,
+            .bl => |f| {
+                if (f.absolute) return error.Unsupported;
+                const target = cur +% f.target;
+                ctx.lr = cur +% 4;
+                const callee = lookup(table, target) orelse {
+                    ctx.fault = .{ .kind = .unsupported, .addr = target };
+                    return;
+                };
+                try runTable(ctx, target, callee, table);
+            },
             .b => |f| {
                 if (f.absolute or f.link) return error.Unsupported;
                 i = try targetIndex(i, f.target, words.len);
@@ -94,6 +114,13 @@ pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
         }
         i += 1;
     }
+}
+
+fn lookup(table: Table, target: u32) ?[]const u32 {
+    for (table) |entry| {
+        if (entry.addr == target) return entry.words;
+    }
+    return null;
 }
 
 /// Branch fields are byte offsets from the current instruction.

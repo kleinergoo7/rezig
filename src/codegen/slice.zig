@@ -28,18 +28,72 @@ pub fn select(
         picked.deinit(allocator);
     }
 
-    for (found) |f| {
+    var by_addr: std.AutoHashMapUnmanaged(u32, usize) = .empty;
+    defer by_addr.deinit(allocator);
+    for (found, 0..) |f, i| try by_addr.put(allocator, f.addr, i);
+
+    var chosen: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer chosen.deinit(allocator);
+
+    for (found) |root| {
         if (picked.items.len >= count) break;
-        if (f.calls.len != 0) continue;
-        if (f.words.len == 0 or f.words.len > max_insns) continue;
-        if (!emit.supportsAll(f.addr, f.words)) continue;
-        const words = try allocator.dupe(u32, f.words);
-        errdefer allocator.free(words);
-        try picked.append(allocator, .{ .addr = f.addr, .words = words });
+        if (chosen.contains(root.addr)) continue;
+
+        var trial: std.ArrayList(analyze.Function) = .empty;
+        defer trial.deinit(allocator);
+        var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        defer seen.deinit(allocator);
+
+        var selector = Selector{
+            .allocator = allocator,
+            .found = found,
+            .by_addr = &by_addr,
+            .seen = &seen,
+            .trial = &trial,
+        };
+        if (!selector.close(root.addr)) continue;
+
+        for (trial.items) |f| {
+            if (chosen.contains(f.addr)) continue;
+            const words = try allocator.dupe(u32, f.words);
+            errdefer allocator.free(words);
+            try picked.append(allocator, .{ .addr = f.addr, .words = words });
+            try chosen.put(allocator, f.addr, {});
+        }
     }
 
     if (picked.items.len < count) return error.NotEnoughFunctions;
+    std.mem.sort(Candidate, picked.items, {}, candidateLessThan);
     return picked.toOwnedSlice(allocator);
+}
+
+const Selector = struct {
+    allocator: std.mem.Allocator,
+    found: []const analyze.Function,
+    by_addr: *const std.AutoHashMapUnmanaged(u32, usize),
+    seen: *std.AutoHashMapUnmanaged(u32, void),
+    trial: *std.ArrayList(analyze.Function),
+
+    /// Adds `addr` and every function it calls. Rejects the whole root if any
+    /// callee is missing or outside the emitter's subset.
+    fn close(self: *Selector, addr: u32) bool {
+        if (self.seen.contains(addr)) return true;
+        const index = self.by_addr.get(addr) orelse return false;
+        const f = self.found[index];
+        if (f.words.len == 0 or f.words.len > max_insns) return false;
+        if (!emit.supportsAll(f.addr, f.words)) return false;
+
+        self.seen.put(self.allocator, addr, {}) catch return false;
+        for (f.calls) |target| {
+            if (!self.close(target)) return false;
+        }
+        self.trial.append(self.allocator, f) catch return false;
+        return true;
+    }
+};
+
+fn candidateLessThan(_: void, a: Candidate, b: Candidate) bool {
+    return a.addr < b.addr;
 }
 
 pub fn freeCandidates(allocator: std.mem.Allocator, list: []Candidate) void {
@@ -77,7 +131,7 @@ pub fn readAddressList(allocator: std.mem.Allocator, io: Io, path: []const u8) !
 
 const testing = std.testing;
 
-test "selects only supported leaves in address order" {
+test "selection closes over calls in address order" {
     const ret = 0x4e800020;
     const addi = 0x38600001;
     const words = [_]u32{
@@ -92,8 +146,10 @@ test "selects only supported leaves in address order" {
     const picked = try select(testing.allocator, &sections, 0x100, 2);
     defer freeCandidates(testing.allocator, picked);
 
-    try testing.expectEqual(@as(u32, 0x10c), picked[0].addr);
-    try testing.expectEqual(@as(u32, 0x114), picked[1].addr);
+    try testing.expectEqual(@as(usize, 3), picked.len);
+    try testing.expectEqual(@as(u32, 0x100), picked[0].addr);
+    try testing.expectEqual(@as(u32, 0x10c), picked[1].addr);
+    try testing.expectEqual(@as(u32, 0x114), picked[2].addr);
 }
 
 test "asking for more than exists fails" {

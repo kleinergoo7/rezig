@@ -55,6 +55,7 @@ pub fn supportsAt(op: insn, at: u32, base: u32, end: u32) bool {
         .b => |f| !f.absolute and !f.link and inRange(at +% f.target, base, end),
         .bc => |f| !f.absolute and !f.link and runtime.Ctx.supportedBo(f.bo) and inRange(at +% f.target, base, end),
         .bclr => |f| !f.absolute and !f.link and runtime.Ctx.supportedBo(f.bo),
+        .bl => |f| !f.absolute,
         else => supports(op),
     };
 }
@@ -112,7 +113,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 try out.appendSlice(allocator, "    return;\n");
                 break;
             }
-            try lower(allocator, &out, op);
+            try lower(allocator, &out, op, addr);
         }
         try out.appendSlice(allocator, "}\n");
         return out.toOwnedSlice(allocator);
@@ -140,7 +141,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 f.bo, f.bi, next,
             }),
             else => {
-                try lower(allocator, &out, op);
+                try lower(allocator, &out, op, addr);
                 try out.print(allocator, "                pc = 0x{X};\n", .{next});
             },
         }
@@ -151,8 +152,11 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
     return out.toOwnedSlice(allocator);
 }
 
-fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn) Error!void {
+fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: u32) Error!void {
     switch (op) {
+        .bl => |f| try out.print(allocator, "    ctx.lr = 0x{X};\n    if (!dispatch(0x{X}, ctx)) {{\n        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n        return;\n    }}\n", .{
+            addr +% 4, addr +% f.target, addr +% f.target,
+        }),
         .nop => {},
         .addi => try immAdd(allocator, out, op.addi.rt, op.addi.ra, sext(op.addi.imm)),
         .addis => try immAdd(allocator, out, op.addis.rt, op.addis.ra, sext32(op.addis.imm)),
@@ -234,7 +238,7 @@ fn mov(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, comptime f
 }
 
 fn movTo(allocator: std.mem.Allocator, out: *std.ArrayList(u8), comptime field: []const u8, rt: u8) !void {
-    try out.print(allocator, "    ctx.{s} = ctx.gpr[{d}];\n", .{ field, gpr(rt) });
+    try out.print(allocator, "    ctx.{s} = @truncate(ctx.gpr[{d}]);\n", .{ field, gpr(rt) });
 }
 
 fn load(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, comptime size: u8, update: bool) !void {
@@ -360,7 +364,11 @@ test "a branch outside the function is refused" {
     try testing.expectError(error.UnsupportedOpcode, function(testing.allocator, &words, .{ .addr = 0x100 }));
 }
 
-test "bl is still refused" {
-    const words = [_]u32{ 0x48000001, 0x4e800020 };
-    try testing.expectError(error.UnsupportedOpcode, function(testing.allocator, &words, .{ .addr = 0 }));
+test "bl calls through dispatch" {
+    // bl +4 at 0x100 targets 0x104.
+    const words = [_]u32{ 0x48000005, 0x4e800020 };
+    const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "ctx.lr = 0x104;") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "dispatch(0x104, ctx)") != null);
 }

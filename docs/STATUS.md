@@ -85,17 +85,18 @@ Done and verified on the real disc:
 - ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
 - codegen: 50 functions from `tests/slice/addresses.json`, `zig fmt` clean.
-- coverage: 1,039 discovered functions, 126,876 instructions. Decoder 86.88%, emitter 78.10%,
-  57 functions fully emittable. Calls are now the gap: `bl` 7,673, then out-of-function `b`
-  1,407, `stfs`/`lfs`, float and VMX. 16,637 words are undecoded, mostly primary opcodes 31,
-  62, 04, 58 and 40. Reproduce with `zig build coverage -Dxex=<xex>`.
+- coverage: 1,039 discovered functions, 126,876 instructions. Decoder 86.88%, emitter 84.15%,
+  87 functions fully emittable. `bl` calls now lower through `dispatch`; the remaining gaps are
+  out-of-function `b` 1,407, `stfs`/`lfs`, float and VMX. 16,637 words are undecoded, mostly
+  primary opcodes 31, 62, 04, 58 and 40. Reproduce with `zig build coverage -Dxex=<xex>`.
 - gate: 50 functions x 64 seeded cases = 3200 differential cases, emitted Zig vs the interpreter,
   PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte. The slice includes
-  branches and loop bodies.
+  branches, loop bodies and nine `bl` call sites; call targets are pulled in by closure.
 - portability: x86_64-windows and aarch64-linux objects build.
 
 ## Bugs the differential found
 
+- `mtlr`/`mtctr` assigned a 64-bit register to the 32-bit LR/CTR field.
 - `or`, `andi.`, `ori`, `oris` and `sraw` wrote the source register instead of the destination.
 - `lbzu`, `lwzu`, `stwu` did not update the base register.
 - `addis` read `r0` instead of literal zero and did not shift the immediate.
@@ -117,5 +118,5 @@ Done and verified on the real disc:
 
 ## Next
 
-P1: direct calls (`bl`) next, then float/VMX and the undecoded primary opcodes, then
-whole-image emission. Intra-function branches, loops and conditional returns are done.
+P1: float/VMX, out-of-function `b` (tail calls), then the undecoded primary opcodes and
+whole-image emission. Branches, loops, conditional returns and direct calls are done.

@@ -19,6 +19,10 @@ fn splitmix(state: *u64) u64 {
 }
 
 test "emitted functions match the interpreter" {
+    const table = try std.testing.allocator.alloc(interp.Entry, slice.functions.len);
+    defer std.testing.allocator.free(table);
+    for (slice.functions, 0..) |f, i| table[i] = .{ .addr = f.addr, .words = f.words };
+
     var cases: u32 = 0;
 
     for (slice.functions) |f| {
@@ -53,7 +57,7 @@ test "emitted functions match the interpreter" {
             ctx_a.lr = @truncate(seed);
             ctx_b.lr = ctx_a.lr;
 
-            interp.run(&ctx_a, f.words) catch |e| {
+            interp.runTable(&ctx_a, f.addr, f.words, table) catch |e| {
                 std.debug.print("addr 0x{X} case {d}: interpreter failed: {s}\n", .{ f.addr, case, @errorName(e) });
                 return e;
             };
