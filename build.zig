@@ -35,6 +35,7 @@ pub fn build(b: *std.Build) void {
     addAnalyzeStep(b, exe, opts);
     addUnlockStep(b, opts);
     addGateStep(b, exe, opts, target, optimize);
+    addPortabilityStep(b);
 }
 
 const Options = struct {
@@ -129,6 +130,24 @@ fn addGateStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, targe
     const compiled = b.addObject(.{ .name = "slice", .root_module = slice_module });
     compiled.step.dependOn(&codegen_run.step);
     step.dependOn(&compiled.step);
+}
+
+/// Tier A/B compile gate. Vulkan behaviour is a manual gate, not a CI gate.
+fn addPortabilityStep(b: *std.Build) void {
+    const step = b.step("portability", "Cross-compile the CLI for x86_64-windows and aarch64-linux");
+    const queries = [_]std.Target.Query{
+        .{ .cpu_arch = .x86_64, .os_tag = .windows },
+        .{ .cpu_arch = .aarch64, .os_tag = .linux },
+    };
+    for (queries, 0..) |query, i| {
+        const mod = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.resolveTargetQuery(query),
+            .optimize = .ReleaseSafe,
+        });
+        const obj = b.addObject(.{ .name = b.fmt("rezig-portability-{d}", .{i}), .root_module = mod });
+        step.dependOn(&obj.step);
+    }
 }
 
 fn failStep(b: *std.Build, step: *std.Build.Step, flag: []const u8) void {

@@ -75,6 +75,25 @@ Two facts this exposed:
   pair to verify instruction encodings for Task 9 instead of hand-transcribing them.
 - PE headers inside a XEX image are little-endian, even though guest code is big-endian.
 
+## P0 progress
+
+Done and verified on the real disc:
+
+- extract: 170 files, 6,956,031,956 bytes; rerun skips all 170.
+- analyze: version `0.0.0.5`, title `545407F2`, entry `0x829A0860`, 13 PE sections from
+  `data/gta4/default.xex.unenc`. No key needed for that file.
+- ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
+- discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
+- codegen: 20 functions from `tests/slice/addresses.json`, `zig fmt` clean.
+- gate (compile half): the 20 emitted functions type-check against the real `Ctx`.
+- portability: x86_64-windows and aarch64-linux objects build.
+
+## Remaining for P0
+
+- Differential gate: needs `tests/oracle/*.json` (20 x 64 cases) from the offline rexglue oracle.
+  The comparator and trace schema are specified in the plan; the harness is external.
+- `build.zig` still has near-duplicate step helpers; `analyze` and `unlock` share options now.
+
 ## Next
 
-Task 9: PPC instruction decode.
+Task 15 closeout is done; next is the oracle run, then P1 (whole-image emission, LZX, `rezig xex`).
