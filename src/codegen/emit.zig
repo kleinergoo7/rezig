@@ -71,7 +71,10 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
             .addis => try imm32(allocator, &out, "shl_add", op.addis.rt, op.addis.ra, op.addis.imm),
             .ori => try immU32(allocator, &out, "|", op.ori.rt, op.ori.ra, op.ori.imm),
             .oris => try immU32Shifted(allocator, &out, op.oris.rt, op.oris.ra, op.oris.imm),
-            .andi_dot => try immU32(allocator, &out, "&", op.andi_dot.rt, op.andi_dot.ra, op.andi_dot.imm),
+            .andi_dot => {
+                try immU32(allocator, &out, "&", op.andi_dot.rt, op.andi_dot.ra, op.andi_dot.imm);
+                try out.print(allocator, "    ctx.setCr(0, ctx.gpr[{d}], 0, true);\n", .{op.andi_dot.rt});
+            },
             .or_ => try binop(allocator, &out, "|", op.or_.rt, op.or_.ra, op.or_.rb),
             .add => try binop(allocator, &out, "+%", op.add.rt, op.add.ra, op.add.rb),
             .subf => try subf(allocator, &out, op.subf.rt, op.subf.ra, op.subf.rb),

@@ -8,4 +8,5 @@ test {
     _ = @import("src/ppc/root.zig");
     _ = @import("src/runtime/root.zig");
     _ = @import("src/codegen/root.zig");
+    _ = @import("src/interp/interp.zig");
 }
