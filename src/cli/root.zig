@@ -4,6 +4,7 @@ const std = @import("std");
 const Io = std.Io;
 const parse = @import("parse.zig");
 const analyze = @import("analyze.zig");
+const codegen = @import("codegen.zig");
 const extract = @import("extract.zig");
 const keys = @import("key.zig");
 const manifest = @import("manifest.zig");
@@ -92,7 +93,23 @@ pub fn run(
             };
             return 0;
         },
-        .codegen, .build, .run => {
+        .codegen => |opts| {
+            const key = keys.resolve(io, opts.key, key_paths) catch |e| {
+                try printKeyError(io, err, e, opts.key, key_paths);
+                return 1;
+            };
+            codegen.run(gpa, io, opts, key) catch |e| {
+                if (e == error.KeyMissing) {
+                    try printKeyMissing(io, err, key_paths);
+                } else {
+                    try err.print("rezig codegen: {s}\n", .{@errorName(e)});
+                }
+                try err.flush();
+                return 1;
+            };
+            return 0;
+        },
+        .build, .run => {
             try err.writeAll("rezig: command not implemented yet\n");
             try err.flush();
             return 1;

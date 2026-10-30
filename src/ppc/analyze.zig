@@ -44,9 +44,9 @@ pub fn functions(
     try enqueue(allocator, &queue, &seen, entry);
 
     while (queue.pop()) |addr| {
-        var err_addr: u32 = 0;
-        const words = functionAt(allocator, sections, addr, &err_addr) catch |e| switch (e) {
-            error.OutOfRange => continue,
+        // Discovery is structural: scan to blr without requiring every word to decode.
+        const words = scanAt(allocator, sections, addr) catch |e| switch (e) {
+            error.OutOfRange, error.NoTerminator => continue,
             else => |other| return other,
         };
         errdefer allocator.free(words);
@@ -83,6 +83,26 @@ pub fn freeFunctions(allocator: std.mem.Allocator, list: []Function) void {
         allocator.free(f.calls);
     }
     allocator.free(list);
+}
+
+/// Scans from `addr` to the first `blr` without decoding. Used for discovery, so one unknown
+/// instruction does not make a whole function invisible.
+fn scanAt(allocator: std.mem.Allocator, sections: []const CodeSection, addr: u32) Error![]u32 {
+    const section = findSection(sections, addr) orelse return error.OutOfRange;
+    const start = (addr - section.addr) / 4;
+
+    var words: std.ArrayList(u32) = .empty;
+    errdefer words.deinit(allocator);
+
+    var index = start;
+    while (index < section.bytes.len / 4) : (index += 1) {
+        if (words.items.len >= max_function_insns) return error.NoTerminator;
+        const at = index * 4;
+        const word = std.mem.readInt(u32, section.bytes[at..][0..4], .big);
+        try words.append(allocator, word);
+        if (word == 0x4e800020) return words.toOwnedSlice(allocator);
+    }
+    return error.NoTerminator;
 }
 
 /// Decodes from `addr` up to and including the first `blr`.

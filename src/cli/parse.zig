@@ -5,8 +5,9 @@ const std = @import("std");
 pub const Extract = struct { iso: []const u8, out: []const u8, key: ?[]const u8 };
 pub const Analyze = struct { tree: ?[]const u8, xex: ?[]const u8, key: ?[]const u8 };
 pub const Codegen = struct {
-    tree: []const u8,
-    key: []const u8,
+    tree: ?[]const u8,
+    xex: ?[]const u8,
+    key: ?[]const u8,
     out: []const u8,
     slice: ?u32,
     slice_list: ?[]const u8,
@@ -102,15 +103,17 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
         return .{ .analyze = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "codegen")) {
-        const tree = try opts.require("tree");
-        const key = try opts.require("key");
         const out = try opts.require("out");
         try opts.rejectUnused(&.{"iso"});
+        const has_tree = opts.tree != null;
+        const has_xex = opts.xex != null;
+        if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
         if (opts.slice != null and opts.slice_list != null) return error.BadValue;
         if (opts.slice == null and opts.slice_list == null) return error.MissingOption;
         return .{ .codegen = .{
-            .tree = tree,
-            .key = key,
+            .tree = opts.tree,
+            .xex = opts.xex,
+            .key = opts.key,
             .out = out,
             .slice = opts.slice,
             .slice_list = opts.slice_list,
