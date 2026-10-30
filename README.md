@@ -43,7 +43,7 @@ Verified on a real GTA IV USA disc 1.0:
 | Function discovery | 24,513 `.pdata` starts, 28,038 discovered functions |
 | Instruction coverage | 1,800,711 unique instructions = 76.73% of `.text` |
 | Decode / emit | 83.77% / 83.56% of discovered instruction instances |
-| Emitter | integer, single-precision float, VMX subset, branches, loops, direct and tail calls |
+| Emitter | integer, single-precision float, VMX subset, branches, loops, direct and indirect calls, tail calls |
 | Differential gate | 50 functions x 64 cases = 3,200 comparisons, all pass |
 | Portability | compiles for x86_64-windows and aarch64-linux |
 
