@@ -62,7 +62,18 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .bc => |f| {
                 if (f.absolute or f.link or !ctx_mod.Ctx.supportedBo(f.bo)) return error.Unsupported;
                 if (ctx.branch(f.bo, f.bi)) {
-                    i = try targetIndex(i, f.target, words.len);
+                    const target = cur +% f.target;
+                    const end = entry_addr +% @as(u32, @intCast(words.len)) * 4;
+                    if (target >= entry_addr and target < end) {
+                        i = try targetIndex(i, f.target, words.len);
+                    } else {
+                        const callee = lookup(table, target) orelse {
+                            ctx.fault = .{ .kind = .unsupported, .addr = target };
+                            return;
+                        };
+                        try runTable(ctx, target, callee, table);
+                        return;
+                    }
                 } else {
                     i += 1;
                 }
@@ -117,6 +128,13 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 ctx.gpr[f.ra] = at;
             },
             .stb => |f| ctx.store8(addr(ctx, f.ra, f.imm), ctx.gpr[f.rt]),
+            .lfs => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(addr(ctx, f.ra, f.imm))))))),
+            .stfs => |f| ctx.store32(addr(ctx, f.ra, f.imm), @as(u32, @bitCast(@as(f32, @floatCast(ctx.fpr[f.frd]))))),
+            .fadd => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] + ctx.fpr[f.frb],
+            .fsub => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] - ctx.fpr[f.frb],
+            .fmul => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] * ctx.fpr[f.frb],
+            .fdiv => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] / ctx.fpr[f.frb],
+            .fcmpu => |f| ctx.setCrFloat(f.crf, ctx.fpr[f.fra], ctx.fpr[f.frb]),
             .cmpwi => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], @bitCast(@as(i64, f.imm)), true),
             .cmplwi => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], @as(u64, f.imm), false),
             else => return error.Unsupported,

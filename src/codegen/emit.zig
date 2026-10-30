@@ -37,6 +37,13 @@ pub fn supports(op: insn) bool {
         .sraw,
         .srawi,
         .rlwinm,
+        .lfs,
+        .stfs,
+        .fadd,
+        .fsub,
+        .fmul,
+        .fdiv,
+        .fcmpu,
         .mflr,
         .mtlr,
         .mfctr,
@@ -51,9 +58,12 @@ pub fn supports(op: insn) bool {
 /// `supports`, plus the checks that need the instruction's position: branches must stay
 /// inside the function and use a supported form.
 pub fn supportsAt(op: insn, at: u32, base: u32, end: u32) bool {
+    _ = at;
+    _ = base;
+    _ = end;
     return switch (op) {
         .b => |f| !f.absolute and !f.link,
-        .bc => |f| !f.absolute and !f.link and runtime.Ctx.supportedBo(f.bo) and inRange(at +% f.target, base, end),
+        .bc => |f| !f.absolute and !f.link and runtime.Ctx.supportedBo(f.bo),
         .bclr => |f| !f.absolute and !f.link and runtime.Ctx.supportedBo(f.bo),
         .bl => |f| !f.absolute,
         else => supports(op),
@@ -141,9 +151,18 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                     try tailCall(allocator, &out, target);
                 }
             },
-            .bc => |f| try out.print(allocator, "                pc = if (ctx.branch({d}, {d})) 0x{X} else 0x{X};\n", .{
-                f.bo, f.bi, addr +% f.target, next,
-            }),
+            .bc => |f| {
+                const target = addr +% f.target;
+                if (inRange(target, base, end)) {
+                    try out.print(allocator, "                pc = if (ctx.branch({d}, {d})) 0x{X} else 0x{X};\n", .{
+                        f.bo, f.bi, target, next,
+                    });
+                } else {
+                    try out.print(allocator, "                if (ctx.branch({d}, {d})) {{\n", .{ f.bo, f.bi });
+                    try tailCall(allocator, &out, target);
+                    try out.print(allocator, "                }}\n                pc = 0x{X};\n", .{next});
+                }
+            },
             .bclr => |f| try out.print(allocator, "                if (ctx.branch({d}, {d})) return;\n                pc = 0x{X};\n", .{
                 f.bo, f.bi, next,
             }),
@@ -198,6 +217,15 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
         .lbzu => try load(allocator, out, op, 1, true),
         .stw, .stb => try store(allocator, out, op, false),
         .stwu => try store(allocator, out, op, true),
+        .lfs => try fLoad(allocator, out, op.lfs.frd, op.lfs.ra, op.lfs.imm),
+        .stfs => try fStore(allocator, out, op.stfs.frd, op.stfs.ra, op.stfs.imm),
+        .fadd => try fBinop(allocator, out, "+", op.fadd.frd, op.fadd.fra, op.fadd.frb),
+        .fsub => try fBinop(allocator, out, "-", op.fsub.frd, op.fsub.fra, op.fsub.frb),
+        .fmul => try fBinop(allocator, out, "*", op.fmul.frd, op.fmul.fra, op.fmul.frb),
+        .fdiv => try fBinop(allocator, out, "/", op.fdiv.frd, op.fdiv.fra, op.fdiv.frb),
+        .fcmpu => try out.print(allocator, "    ctx.setCrFloat({d}, ctx.fpr[{d}], ctx.fpr[{d}]);\n", .{
+            op.fcmpu.crf, op.fcmpu.fra, op.fcmpu.frb,
+        }),
         .cmpwi => try compareImm(allocator, out, op.cmpwi.crf, op.cmpwi.ra, op.cmpwi.imm, true),
         .cmplwi => try compareImm(allocator, out, op.cmplwi.crf, op.cmplwi.ra, op.cmplwi.imm, false),
         else => return error.UnsupportedOpcode,
@@ -313,6 +341,28 @@ fn printAddr(
     try out.print(allocator, "        ctx.gpr[{d}] = ea;\n    }}\n", .{ra});
 }
 
+fn fBinop(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: []const u8, frd: u8, fra: u8, frb: u8) !void {
+    try out.print(allocator, "    ctx.fpr[{d}] = ctx.fpr[{d}] {s} ctx.fpr[{d}];\n", .{ frd, fra, op, frb });
+}
+
+fn fLoad(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frd: u8, ra: u8, imm: i16) !void {
+    const value = @as(u32, @bitCast(@as(i32, imm)));
+    if (ra == 0) {
+        try out.print(allocator, "    ctx.fpr[{d}] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(0 +% 0x{X:0>8}))))));\n", .{ frd, value });
+    } else {
+        try out.print(allocator, "    ctx.fpr[{d}] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(@as(u32, @truncate(ctx.gpr[{d}])) +% 0x{X:0>8}))))));\n", .{ frd, ra, value });
+    }
+}
+
+fn fStore(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frd: u8, ra: u8, imm: i16) !void {
+    const value = @as(u32, @bitCast(@as(i32, imm)));
+    if (ra == 0) {
+        try out.print(allocator, "    ctx.store32(0 +% 0x{X:0>8}, @as(u32, @bitCast(@as(f32, @floatCast(ctx.fpr[{d}])))));\n", .{ value, frd });
+    } else {
+        try out.print(allocator, "    ctx.store32(@as(u32, @truncate(ctx.gpr[{d}])) +% 0x{X:0>8}, @as(u32, @bitCast(@as(f32, @floatCast(ctx.fpr[{d}])))));\n", .{ ra, value, frd });
+    }
+}
+
 fn compareImm(allocator: std.mem.Allocator, out: *std.ArrayList(u8), crf: u3, ra: u8, imm: anytype, signed: bool) !void {
     try out.print(allocator, "    ctx.setCr({d}, ctx.gpr[{d}], 0x{X:0>16}, {s});\n", .{
         crf, gpr(ra), @as(u64, @bitCast(@as(i64, imm))), if (signed) "true" else "false",
@@ -349,9 +399,16 @@ test "golden function" {
     , text);
 }
 
-test "float and vmx are refused" {
-    const words = [_]u32{ 0xfc22182a, 0x4e800020 };
+test "vmx is refused" {
+    const words = [_]u32{ 0x10221cc4, 0x4e800020 };
     try testing.expectError(error.UnsupportedOpcode, function(testing.allocator, &words, .{ .addr = 0 }));
+}
+
+test "float arithmetic lowers to fpr operations" {
+    const words = [_]u32{ 0xfc22182a, 0x4e800020 };
+    const text = try function(testing.allocator, &words, .{ .addr = 0 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "ctx.fpr[1] = ctx.fpr[2] + ctx.fpr[3];") != null);
 }
 
 test "forward branch targets the labelled address" {

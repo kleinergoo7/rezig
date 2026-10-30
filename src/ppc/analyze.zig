@@ -61,16 +61,6 @@ pub fn functions(
                 const target = addr +% @as(u32, @intCast(i)) *% 4 +% rel;
                 try calls.append(allocator, target);
                 try enqueue(allocator, &queue, &seen, target);
-            } else if (insn == .b) {
-                const f = insn.b;
-                if (f.absolute or f.link) continue;
-                const at = addr +% @as(u32, @intCast(i)) *% 4;
-                const target = at +% f.target;
-                const end = addr +% @as(u32, @intCast(words.len)) *% 4;
-                if (target < addr or target >= end) {
-                    try calls.append(allocator, target);
-                    try enqueue(allocator, &queue, &seen, target);
-                }
             }
         }
 

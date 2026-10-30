@@ -89,6 +89,21 @@ pub const Ctx = struct {
             if (a > b) field |= 0b0100;
             if (a == b) field |= 0b0010;
         }
+        self.writeCrField(crf, field);
+    }
+
+    /// `fcmpu`: unordered comparisons clear LT/GT/EQ. XER.SO is not modelled.
+    pub fn setCrFloat(self: *Ctx, crf: u3, a: f64, b: f64) void {
+        var field: u32 = 0;
+        if (!(std.math.isNan(a) or std.math.isNan(b))) {
+            if (a < b) field |= 0b1000;
+            if (a > b) field |= 0b0100;
+            if (a == b) field |= 0b0010;
+        }
+        self.writeCrField(crf, field);
+    }
+
+    fn writeCrField(self: *Ctx, crf: u3, field: u32) void {
         const shift: u5 = @intCast((7 - @as(u32, crf)) * 4);
         const mask: u32 = @as(u32, 0xf) << shift;
         self.cr = (self.cr & ~mask) | (field << shift);
@@ -238,6 +253,20 @@ test "branch implements every supported BO encoding" {
     try std.testing.expect(ctx.branch(10, 0));
     ctx.ctr = 1;
     try std.testing.expect(!ctx.branch(2, 0));
+}
+
+test "setCrFloat sets LT, GT, EQ and unordered" {
+    var ctx = Ctx.init(.{ .base = 0, .data = &.{} });
+    ctx.setCrFloat(2, 1.0, 2.0);
+    try std.testing.expectEqual(@as(u1, 1), ctx.crBit(8));
+    ctx.setCrFloat(2, 2.0, 1.0);
+    try std.testing.expectEqual(@as(u1, 1), ctx.crBit(9));
+    ctx.setCrFloat(2, 2.0, 2.0);
+    try std.testing.expectEqual(@as(u1, 1), ctx.crBit(10));
+    ctx.setCrFloat(2, std.math.nan(f64), 1.0);
+    try std.testing.expectEqual(@as(u1, 0), ctx.crBit(8));
+    try std.testing.expectEqual(@as(u1, 0), ctx.crBit(9));
+    try std.testing.expectEqual(@as(u1, 0), ctx.crBit(10));
 }
 
 test "setCr writes the requested field only" {

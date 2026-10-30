@@ -78,6 +78,14 @@ test "emitted functions match the interpreter" {
                 });
                 return error.RegisterMismatch;
             }
+            for (ctx_a.fpr, ctx_b.fpr, 0..) |expected, actual, i| {
+                if (@as(u64, @bitCast(expected)) != @as(u64, @bitCast(actual))) {
+                    std.debug.print("g_{X} case {d}: fpr[{d}] expected 0x{X} actual 0x{X}\n", .{
+                        f.addr, case, i, @as(u64, @bitCast(expected)), @as(u64, @bitCast(actual)),
+                    });
+                    return error.RegisterMismatch;
+                }
+            }
             if (ctx_a.cr != ctx_b.cr) {
                 std.debug.print("g_{X} case {d}: cr expected 0x{X} actual 0x{X}\n", .{ f.addr, case, ctx_a.cr, ctx_b.cr });
                 return error.RegisterMismatch;

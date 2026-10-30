@@ -85,16 +85,20 @@ Done and verified on the real disc:
 - ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
 - codegen: 50 functions from `tests/slice/addresses.json`, `zig fmt` clean.
-- coverage: 1,279 discovered functions, 173,041 instructions. Decoder 86.69%, emitter 85.13%,
-  112 functions fully emittable. `bl` and out-of-function `b` both lower through `dispatch`.
-  Remaining gaps are `stfs` 988, `lfs`, float and VMX; 23,030 words are undecoded, mostly primary
-  opcodes 31, 62, 04, 58 and 40. Reproduce with `zig build coverage -Dxex=<xex>`.
+- coverage: 1,039 discovered functions, 126,876 instructions. Decoder 86.88%, emitter 86.76%,
+  121 functions fully emittable. Single-precision float is done: `lfs`, `stfs`, `fadd`, `fsub`,
+  `fmul`, `fdiv`, `fcmpu`. `bl`, out-of-function `b` and conditional tail `bc` lower through
+  `dispatch`. Remaining gaps are VMX (`vor`, `lvx`, `stvx`, `vaddfp`, `vxor`) and 16,637
+  undecoded words, mostly primary opcodes 31, 62, 04, 58 and 40. Reproduce with
+  `zig build coverage -Dxex=<xex>`.
 - gate: 50 functions x 64 seeded cases = 3200 differential cases, emitted Zig vs the interpreter,
   PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte. The slice includes
   branches, loop bodies and nine `bl` call sites; call targets are pulled in by closure.
-- tail calls: `b` outside the function dispatches and returns to the caller. No real tail-call
-  root is fully emittable yet because every observed target contains float, VMX or undecoded
-  words, so a synthetic interpreter test pins the semantics.
+- tail calls: `b` and conditional `bc` outside the function dispatch and return to the caller.
+  A synthetic interpreter test pins the semantics.
+- float: emitter and interpreter agree on `fpr` in unit tests, but no real function that uses
+  float is fully supported yet: every candidate also contains undecoded instructions. The gate
+  therefore exercises float lowering only through its golden test, not through GTA IV code.
 - portability: x86_64-windows and aarch64-linux objects build.
 
 ## Bugs the differential found
