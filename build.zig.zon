@@ -1,0 +1,14 @@
+.{
+    .name = .rezig,
+    .version = "0.0.0",
+    .fingerprint = 0x77478a10fd8bad0a,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "docs",
+    },
+}

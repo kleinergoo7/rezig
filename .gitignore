@@ -1,0 +1,8 @@
+.zig-cache/
+zig-out/
+data/
+oracle/
+*.iso
+*.xex
+*.aes
+*.key
