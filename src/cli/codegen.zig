@@ -7,6 +7,7 @@ const image = @import("../xex/image.zig");
 const analyze = @import("../ppc/analyze.zig");
 const slice = @import("../codegen/slice.zig");
 const emit = @import("../codegen/emit.zig");
+const abi = @import("../codegen/abi.zig");
 
 pub const Options = parse.Codegen;
 
@@ -66,6 +67,32 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         defer allocator.free(text);
         try out.appendSlice(allocator, text);
     }
+
+    for (picked) |candidate| {
+        try out.print(allocator, "const w_{X} = [_]u32{{\n", .{candidate.addr});
+        for (candidate.words, 0..) |word, i| {
+            if (i % 4 == 0) try out.appendSlice(allocator, "    ");
+            try out.print(allocator, "0x{X}", .{word});
+            if (i + 1 == candidate.words.len) {
+                try out.appendSlice(allocator, ",\n");
+            } else if (i % 4 == 3) {
+                try out.appendSlice(allocator, ",\n");
+            } else {
+                try out.appendSlice(allocator, ", ");
+            }
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    try out.appendSlice(allocator, "\npub const functions = [_]struct { addr: u32, words: []const u32 }{\n");
+    for (picked) |candidate| {
+        try out.print(allocator, "    .{{ .addr = 0x{X}, .words = &w_{X} }},\n", .{ candidate.addr, candidate.addr });
+    }
+    try out.appendSlice(allocator, "};\n\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
+    for (picked) |candidate| {
+        var name_buf: [10]u8 = undefined;
+        try out.print(allocator, "        0x{X} => {{\n            {s}(ctx);\n            return true;\n        }},\n", .{ candidate.addr, abi.fnName(candidate.addr, &name_buf) });
+    }
+    try out.appendSlice(allocator, "        else => false,\n    };\n}\n");
 
     var dir = try Io.Dir.cwd().createDirPathOpen(io, opts.out, .{});
     defer dir.close(io);
