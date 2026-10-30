@@ -29,4 +29,39 @@ pub fn build(b: *std.Build) void {
     });
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    addExtractStep(b, exe);
+    addAnalyzeStep(b, exe);
+}
+
+fn addExtractStep(b: *std.Build, exe: *std.Build.Step.Compile) void {
+    const step = b.step("extract", "Extract the disc tree from an ISO");
+    const iso = b.option([]const u8, "iso", "path to the Xbox 360 ISO") orelse
+        return failStep(b, step, "-Diso=<path>");
+    const out = b.option([]const u8, "out", "output game tree") orelse
+        return failStep(b, step, "-Dout=<dir>");
+
+    const run = b.addRunArtifact(exe);
+    run.addArgs(&.{ "extract", "--iso", iso, "--out", out });
+    if (b.option([]const u8, "key", "path to a 16-byte XEX key")) |key| {
+        run.addArgs(&.{ "--key", key });
+    }
+    step.dependOn(&run.step);
+}
+
+fn addAnalyzeStep(b: *std.Build, exe: *std.Build.Step.Compile) void {
+    const step = b.step("analyze", "Report the XEX version, entry point and PE sections");
+    const tree = b.option([]const u8, "tree", "extracted game tree") orelse
+        return failStep(b, step, "-Dtree=<dir>");
+    const key = b.option([]const u8, "key", "path to a 16-byte XEX key") orelse
+        return failStep(b, step, "-Dkey=<path>");
+
+    const run = b.addRunArtifact(exe);
+    run.addArgs(&.{ "analyze", "--tree", tree, "--key", key });
+    step.dependOn(&run.step);
+}
+
+fn failStep(b: *std.Build, step: *std.Build.Step, comptime flag: []const u8) void {
+    const fail = b.addFail(b.fmt("zig build {s} needs -D{s}", .{ step.name, flag }));
+    step.dependOn(&fail.step);
 }

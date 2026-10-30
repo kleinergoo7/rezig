@@ -199,7 +199,7 @@ fn readU16(bytes: []const u8, offset: u32) u16 {
 }
 
 const testing = std.testing;
-const xex_writer = @import("../../tests/fixtures/xex_writer.zig");
+const xex_writer = @import("../fixtures/xex_writer.zig");
 
 fn fixture() ![]u8 {
     return xex_writer.build(testing.allocator);

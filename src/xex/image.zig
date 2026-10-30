@@ -34,6 +34,9 @@ pub const Image = struct {
     base_address: u32,
     entry_point: u32,
     sections: []PeSection,
+    version: header.Version,
+    title_id: u32,
+    media_id: u32,
 
     pub fn deinit(self: *Image, allocator: std.mem.Allocator) void {
         allocator.free(self.bytes);
@@ -61,29 +64,37 @@ pub fn load(
     defer file.close(io);
 
     const st = try file.stat(io);
-    if (st.size < 0x1000) return error.Truncated;
     if (st.size > MAX_XEX) return error.TooLarge;
 
-    var head: [0x1000]u8 = undefined;
-    if (try file.readPositionalAll(io, &head, 0) != head.len) return error.Truncated;
+    const bytes = try allocator.alloc(u8, @intCast(st.size));
+    defer allocator.free(bytes);
+    if (try file.readPositionalAll(io, bytes, 0) != bytes.len) return error.Truncated;
 
-    const header_size = std.mem.readInt(u32, head[8..12], .big);
+    return loadBytes(allocator, bytes, key);
+}
+
+pub fn loadBytes(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    key: [16]u8,
+) Error!Image {
+    if (bytes.len < 0x1000) return error.Truncated;
+
+    const header_size = std.mem.readInt(u32, bytes[8..12], .big);
     if (header_size < 0x18 or header_size > MAX_HEADER) return error.Truncated;
-    if (header_size > st.size or header_size % 16 != 0) return error.Truncated;
+    if (header_size > bytes.len or header_size % 16 != 0) return error.Truncated;
 
-    const header_bytes = try allocator.alloc(u8, header_size);
-    defer allocator.free(header_bytes);
-    if (try file.readPositionalAll(io, header_bytes, 0) != header_bytes.len) return error.Truncated;
-
-    var h = try header.parse(allocator, header_bytes);
+    var h = try header.parse(allocator, bytes);
     defer h.deinit(allocator);
 
-    const payload_len = st.size - header_size;
+    const payload_len = bytes.len - header_size;
     if (payload_len % 16 != 0) return error.Truncated;
 
-    const payload = try allocator.alloc(u8, @intCast(payload_len));
+    const payload = try allocator.alloc(u8, payload_len);
     defer allocator.free(payload);
-    if (try file.readPositionalAll(io, payload, header_size) != payload.len) return error.Truncated;
+    @memcpy(payload, bytes[header_size..]);
+
+    if (h.security.image_size == 0) return error.ImageSizeMismatch;
 
     if (h.file_format.encryption == .normal) {
         var session_key: [16]u8 = undefined;
@@ -111,6 +122,9 @@ pub fn load(
         .base_address = pe.base_address,
         .entry_point = pe.entry_point,
         .sections = pe.sections,
+        .version = h.execution.version,
+        .title_id = h.execution.title_id,
+        .media_id = h.execution.media_id,
     };
 }
 
@@ -212,7 +226,7 @@ fn parsePe(allocator: std.mem.Allocator, bytes: []const u8, encrypted: bool) Err
 }
 
 const testing = std.testing;
-const xex_writer = @import("../../tests/fixtures/xex_writer.zig");
+const xex_writer = @import("../fixtures/xex_writer.zig");
 
 const zero_key: [16]u8 = std.mem.zeroes([16]u8);
 

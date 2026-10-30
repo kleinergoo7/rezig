@@ -253,7 +253,7 @@ fn Walker(comptime S: type) type {
 }
 
 const testing = std.testing;
-const iso_writer = @import("../../tests/fixtures/iso_writer.zig");
+const iso_writer = @import("../fixtures/iso_writer.zig");
 
 fn testIo() Io {
     return Io.Threaded.global_single_threaded.io();

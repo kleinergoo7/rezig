@@ -119,3 +119,33 @@ pub fn buildDeep(allocator: std.mem.Allocator, base: u64, depth: u32) !Image {
 fn fillFile(dest: []u8, seed: u8) void {
     for (dest, 0..) |*b, i| b.* = @truncate(seed +% @as(u8, @truncate(i)));
 }
+
+pub const XEX_BASE_SECTOR: u32 = 60;
+
+pub fn buildWithXex(allocator: std.mem.Allocator, base: u64, xex: []const u8) !Image {
+    const xex_sectors = (xex.len + SECTOR - 1) / SECTOR;
+    const total: u32 = XEX_BASE_SECTOR + @as(u32, @intCast(xex_sectors)) + 1;
+    const bytes = try allocator.alloc(u8, total * SECTOR);
+    errdefer allocator.free(bytes);
+    @memset(bytes, 0);
+
+    const vd = bytes[VOLUME_SECTOR * SECTOR ..][0..SECTOR];
+    @memcpy(vd[0..magic.len], magic);
+    std.mem.writeInt(u32, vd[0x14..][0..4], ROOT_SECTOR, .little);
+    std.mem.writeInt(u32, vd[0x18..][0..4], SECTOR, .little);
+    std.mem.writeInt(u32, vd[0x1C..][0..4], @intCast(bytes.len), .little);
+
+    var root = DirWriter{ .table = bytes[ROOT_SECTOR * SECTOR ..][0..SECTOR] };
+    root.add("data", DATA_SECTOR, SECTOR, 0x10);
+    root.add("default.xex", XEX_BASE_SECTOR, @intCast(xex.len), 0x80);
+    root.add("common.rpf", 44, 4096, 0x80);
+
+    var data = DirWriter{ .table = bytes[DATA_SECTOR * SECTOR ..][0..SECTOR] };
+    data.add("inner.bin", 46, 7, 0x80);
+
+    fillFile(bytes[44 * SECTOR ..][0..4096], 2);
+    fillFile(bytes[46 * SECTOR ..][0..7], 3);
+    @memcpy(bytes[XEX_BASE_SECTOR * SECTOR ..][0..xex.len], xex);
+
+    return .{ .base = base, .bytes = bytes, .size = base + bytes.len };
+}
