@@ -3,7 +3,9 @@
     .version = "0.0.0",
     .fingerprint = 0x77478a10fd8bad0a,
     .minimum_zig_version = "0.17.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .xextool = .{ .path = "../xextool-zig" },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

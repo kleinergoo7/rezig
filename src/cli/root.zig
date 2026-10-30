@@ -5,6 +5,7 @@ const Io = std.Io;
 const parse = @import("parse.zig");
 const analyze = @import("analyze.zig");
 const codegen = @import("codegen.zig");
+const xex_convert = @import("xex.zig");
 const extract = @import("extract.zig");
 const keys = @import("key.zig");
 const manifest = @import("manifest.zig");
@@ -15,6 +16,7 @@ pub const usage =
     \\commands:
     \\  extract   Copy the disc tree from an ISO and verify it
     \\  analyze   Parse the XEX and report version, entry point and sections
+    \\  xex       Rewrite an XEX as an unencrypted, uncompressed copy
     \\  codegen   Emit Zig source for selected guest functions
     \\  build     Build the generated project
     \\  run       Run the generated project
@@ -87,6 +89,22 @@ pub fn run(
                     try printKeyMissing(io, err, key_paths);
                 } else {
                     try err.print("rezig analyze: {s}\n", .{@errorName(e)});
+                }
+                try err.flush();
+                return 1;
+            };
+            return 0;
+        },
+        .xex_convert => |opts| {
+            const key = keys.resolve(io, opts.key, key_paths) catch |e| {
+                try printKeyError(io, err, e, opts.key, key_paths);
+                return 1;
+            };
+            xex_convert.run(gpa, io, opts, key) catch |e| {
+                if (e == error.KeyMissing) {
+                    try printKeyMissing(io, err, key_paths);
+                } else {
+                    try err.print("rezig xex: {s}\n", .{@errorName(e)});
                 }
                 try err.flush();
                 return 1;

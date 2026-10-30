@@ -7,7 +7,7 @@ P0 — clean extraction, then a 20-function Zig slice.
 ## Done
 
 - Repository scaffold, Zig 0.17.0 pinned.
-- CLI parsing (`extract`, `analyze`, `codegen`, `build`, `run`, `help`).
+- CLI parsing (`extract`, `analyze`, `xex`, `codegen`, `build`, `run`, `help`).
 - XDVDFS reader, XEX2 header parser, AES-128-CBC, XEX image decrypt + basic decompress + PE parse.
 - `zig build extract` and `zig build analyze`.
 - Key resolution: `--key`, then `REZIG_XEX_KEY`, then `~/.config/rezig/xex.key`. No key ships
@@ -31,11 +31,12 @@ GTA IV USA disc 1.0, no title update:
 
 ## Unlocked image gate (2026-10-30)
 
-XexTool 7.0 built in `/tmp/opencode/xextool/build`, then:
+First produced offline with XexTool 7.0. Now `rezig xex` produces the same bytes in-process:
 
 ```
-zig build unlock -Dxex=data/gta4/default.xex -Dxextool=/tmp/opencode/xextool/build/XexTool
-zig build analyze -Dxex=data/gta4/default.xex.unenc
+zig build xex -Dxex=data/gta4/default.xex -Dout=/tmp/rezig-default.xex -Dkey=<key>
+cmp /tmp/rezig-default.xex data/gta4/default.xex.unenc
+zig build analyze -Dxex=/tmp/rezig-default.xex
 ```
 
 Output: version `0.0.0.5`, title `545407F2`, base `0x82000000`, entry `0x829A0860`,
@@ -51,22 +52,17 @@ Two facts this exposed:
 
 ## Blocked
 
-- The 20-function gate needs real oracle traces from the offline rexglue oracle, and an unlocked
-  GTA IV image (user key or `--xex`). Neither is in the repo.
+- Guest truth: no Xenia or Unicorn traces exist in the repo, so the differential proves lowering,
+  not PPC semantics.
 
-## Interims
+## Conversion
 
-- Converting a retail XEX to an unlocked one for `--xex` is done offline with Team-Resurgent
-  XexTool. GPLv3, never linked, built or shipped here; its output is game data under `data/`.
-  P1 replaces it with `rezig xex`.
+`rezig xex` links the reader, writer, packer and LZX from the GPL Zig port of XexTool. The
+library takes console keys from its caller, so rezig's binary contains no AES key constants and
+no signing private key; the user's key arrives through the normal resolution order.
 
-  ```
-  zig build unlock -Dxex=data/gta4/default.xex -Dxextool=/path/to/XexTool
-  zig build analyze -Dxex=data/gta4/default.xex.unenc
-  ```
-
-  The step is a thin wrapper around the external binary and is never part of `zig build` or
-  `zig build test`. Without `-Dxextool` it looks for `XexTool` on `PATH`.
+Verified on 2026-10-30: the rewritten `default.xex` is byte-identical to the copy the C++ tool
+produced (11,841,536 bytes), and the result passes `analyze` and the 1280-case gate.
 
 ## Licence
 
@@ -114,4 +110,4 @@ Done and verified on the real disc:
 
 ## Next
 
-Task 15 closeout is done; next is the oracle run, then P1 (whole-image emission, LZX, `rezig xex`).
+P1: whole-image emission, kernel surface, and guest-truth traces if wanted.

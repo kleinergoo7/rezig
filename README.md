@@ -8,6 +8,7 @@ Pilot title: Grand Theft Auto IV, USA disc 1.0, base game, no title update.
 ## Requirements
 
 - Zig 0.17.0, invoked as `/home/linuxbrew/.linuxbrew/bin/zig` on this machine.
+- The sibling `xextool-zig` checkout at `../xextool-zig` (path dependency; supplies the XEX writer).
 - A legal copy of the disc image.
 - For real code: a 16-byte XEX key of your own, or an already-unlocked XEX.
 
@@ -22,6 +23,7 @@ zig build test                  # unit, fixture and golden tests; no ISO, no key
 zig build extract -Diso=<disc.iso> -Dout=data/gta4
 zig build analyze -Dtree=data/gta4                 # header only; needs no key
 zig build analyze -Dtree=data/gta4 -Dkey=<key>     # decrypts and lists PE sections
+zig build xex -Dxex=<retail.xex> -Dout=<unlocked.xex> -Dkey=<key>
 zig build codegen -Dxex=<unlocked.xex> -Dout=zig-out/codegen -Dslice=20
 zig build gate -Dxex=<unlocked.xex> -Dslice-list=tests/slice/addresses.json
 zig build portability           # x86_64-windows and aarch64-linux compile gate
@@ -38,8 +40,9 @@ Resolution order, first match wins:
 The file must be exactly 16 raw bytes. One retail key works for every retail disc; it is not
 game-specific. The game-specific session key lives inside each XEX and is never stored by us.
 
-Without a key, use `--xex` with an already-decrypted image. `zig build unlock -Dxex=<xex>
--Dxextool=<XexTool binary>` wraps the external tool temporarily; P1 replaces it with `rezig xex`.
+`rezig xex --in <retail.xex> --out <unlocked.xex> --key <key>` rewrites a retail XEX as an
+unencrypted, uncompressed copy. It reads the input with the caller's key and links the XEX writer
+from the GPL Zig port of XexTool; the linked library holds no key constants.
 
 The 32-byte `aes_key.bin` shipped by some GTA IV mods is the RPF key, not the XEX key. rezig
 rejects it with `BadKeySize`.

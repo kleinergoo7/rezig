@@ -4,12 +4,19 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const xextool = b.dependency("xextool", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("xextool");
+
     const exe = b.addExecutable(.{
         .name = "rezig",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "xextool", .module = xextool }},
         }),
     });
     b.installArtifact(exe);
@@ -25,6 +32,8 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("test.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "xextool", .module = xextool }},
         }),
     });
     const test_step = b.step("test", "Run all tests");
@@ -33,9 +42,9 @@ pub fn build(b: *std.Build) void {
     const opts = readOptions(b);
     addExtractStep(b, exe, opts);
     addAnalyzeStep(b, exe, opts);
-    addUnlockStep(b, opts);
+    addXexStep(b, exe, opts);
     addGateStep(b, exe, opts, target, optimize);
-    addPortabilityStep(b);
+    addPortabilityStep(b, xextool);
 }
 
 const Options = struct {
@@ -44,7 +53,6 @@ const Options = struct {
     key: ?[]const u8,
     tree: ?[]const u8,
     xex: ?[]const u8,
-    xextool: ?[]const u8,
     slice: ?[]const u8,
     slice_list: ?[]const u8,
 };
@@ -57,7 +65,6 @@ fn readOptions(b: *std.Build) Options {
         .key = b.option([]const u8, "key", "path to a 16-byte XEX key"),
         .tree = b.option([]const u8, "tree", "extracted game tree"),
         .xex = b.option([]const u8, "xex", "path to a XEX file"),
-        .xextool = b.option([]const u8, "xextool", "XexTool binary for the unlock step (defaults to PATH)"),
         .slice = b.option([]const u8, "slice", "number of functions to select"),
         .slice_list = b.option([]const u8, "slice-list", "frozen address list"),
     };
@@ -88,15 +95,14 @@ fn addAnalyzeStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) vo
     step.dependOn(&run.step);
 }
 
-/// Temporary: XexTool is external, GPLv3, and never part of the product or of `zig build`.
-/// P1 replaces this step with `rezig xex`.
-fn addUnlockStep(b: *std.Build, opts: Options) void {
-    const step = b.step("unlock", "TEMPORARY: convert a retail XEX to an unencrypted copy with XexTool");
+fn addXexStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) void {
+    const step = b.step("xex", "Convert a retail XEX to an unencrypted copy");
     const xex = opts.xex orelse return failStep(b, step, "-Dxex=<path>");
-    const out = opts.out orelse b.fmt("{s}.unenc", .{xex});
-    const tool = opts.xextool orelse "XexTool";
+    const out = opts.out orelse return failStep(b, step, "-Dout=<path>");
 
-    const run = b.addSystemCommand(&.{ tool, "-e", "u", "-c", "u", "-o", out, xex });
+    const run = b.addRunArtifact(exe);
+    run.addArgs(&.{ "xex", "--in", xex, "--out", out });
+    if (opts.key) |key| run.addArgs(&.{ "--key", key });
     step.dependOn(&run.step);
 }
 
@@ -166,7 +172,7 @@ fn addGateStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, targe
 }
 
 /// Tier A/B compile gate. Vulkan behaviour is a manual gate, not a CI gate.
-fn addPortabilityStep(b: *std.Build) void {
+fn addPortabilityStep(b: *std.Build, xextool: *std.Build.Module) void {
     const step = b.step("portability", "Cross-compile the CLI for x86_64-windows and aarch64-linux");
     const queries = [_]std.Target.Query{
         .{ .cpu_arch = .x86_64, .os_tag = .windows },
@@ -177,6 +183,8 @@ fn addPortabilityStep(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = b.resolveTargetQuery(query),
             .optimize = .ReleaseSafe,
+            .link_libc = true,
+            .imports = &.{.{ .name = "xextool", .module = xextool }},
         });
         const obj = b.addObject(.{ .name = b.fmt("rezig-portability-{d}", .{i}), .root_module = mod });
         step.dependOn(&obj.step);

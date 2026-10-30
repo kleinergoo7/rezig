@@ -4,6 +4,7 @@ const std = @import("std");
 
 pub const Extract = struct { iso: []const u8, out: []const u8, key: ?[]const u8 };
 pub const Analyze = struct { tree: ?[]const u8, xex: ?[]const u8, key: ?[]const u8 };
+pub const Xex = struct { in: []const u8, out: []const u8, key: ?[]const u8 };
 pub const Codegen = struct {
     tree: ?[]const u8,
     xex: ?[]const u8,
@@ -18,6 +19,7 @@ pub const Run = struct { tree: []const u8 };
 pub const Command = union(enum) {
     extract: Extract,
     analyze: Analyze,
+    xex_convert: Xex,
     codegen: Codegen,
     build: Build,
     run: Run,
@@ -28,6 +30,7 @@ pub const ParseError = error{ Usage, UnknownCommand, MissingOption, UnknownOptio
 
 const Options = struct {
     iso: ?[]const u8 = null,
+    in: ?[]const u8 = null,
     out: ?[]const u8 = null,
     key: ?[]const u8 = null,
     tree: ?[]const u8 = null,
@@ -69,7 +72,9 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
         const value: []const u8 = args[i + 1];
         i += 2;
 
-        if (std.mem.eql(u8, flag, "--iso")) {
+        if (std.mem.eql(u8, flag, "--in")) {
+            try opts.set("in", value);
+        } else if (std.mem.eql(u8, flag, "--iso")) {
             try opts.set("iso", value);
         } else if (std.mem.eql(u8, flag, "--out")) {
             try opts.set("out", value);
@@ -92,19 +97,25 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
     if (std.mem.eql(u8, name, "extract")) {
         const iso = try opts.require("iso");
         const out = try opts.require("out");
-        try opts.rejectUnused(&.{ "tree", "xex", "slice", "slice_list" });
+        try opts.rejectUnused(&.{ "in", "tree", "xex", "slice", "slice_list" });
         return .{ .extract = .{ .iso = iso, .out = out, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "analyze")) {
-        try opts.rejectUnused(&.{ "iso", "out", "slice", "slice_list" });
+        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list" });
         const has_tree = opts.tree != null;
         const has_xex = opts.xex != null;
         if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
         return .{ .analyze = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
     }
+    if (std.mem.eql(u8, name, "xex")) {
+        const input = try opts.require("in");
+        const out = try opts.require("out");
+        try opts.rejectUnused(&.{ "iso", "tree", "xex", "slice", "slice_list" });
+        return .{ .xex_convert = .{ .in = input, .out = out, .key = opts.key } };
+    }
     if (std.mem.eql(u8, name, "codegen")) {
         const out = try opts.require("out");
-        try opts.rejectUnused(&.{"iso"});
+        try opts.rejectUnused(&.{ "iso", "in" });
         const has_tree = opts.tree != null;
         const has_xex = opts.xex != null;
         if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
@@ -121,7 +132,7 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
     }
     if (std.mem.eql(u8, name, "build") or std.mem.eql(u8, name, "run")) {
         const tree = try opts.require("tree");
-        try opts.rejectUnused(&.{ "iso", "out", "key", "xex", "slice", "slice_list" });
+        try opts.rejectUnused(&.{ "iso", "in", "out", "key", "xex", "slice", "slice_list" });
         if (std.mem.eql(u8, name, "build")) return .{ .build = .{ .tree = tree } };
         return .{ .run = .{ .tree = tree } };
     }
@@ -185,6 +196,22 @@ test "unknown option" {
 
 test "duplicate option is bad value" {
     try testing.expectError(error.BadValue, parse(&.{ "rezig", "extract", "--iso", "a", "--iso", "b", "--out", "d" }));
+}
+
+test "xex needs input and output" {
+    try testing.expectError(error.MissingOption, parse(&.{ "rezig", "xex", "--in", "a.xex" }));
+    try testing.expectError(error.MissingOption, parse(&.{ "rezig", "xex", "--out", "b.xex" }));
+}
+
+test "xex accepts a key" {
+    const cmd = try parse(&.{ "rezig", "xex", "--in", "a.xex", "--out", "b.xex", "--key", "k" });
+    try testing.expectEqualStrings("a.xex", cmd.xex_convert.in);
+    try testing.expectEqualStrings("b.xex", cmd.xex_convert.out);
+    try testing.expectEqualStrings("k", cmd.xex_convert.key.?);
+}
+
+test "xex rejects an unrelated option" {
+    try testing.expectError(error.UnknownOption, parse(&.{ "rezig", "xex", "--in", "a", "--out", "b", "--slice", "20" }));
 }
 
 test "codegen needs a slice source" {
