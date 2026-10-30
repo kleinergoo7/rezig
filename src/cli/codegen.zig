@@ -162,7 +162,7 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         // Import thunks become host stubs that log on first call.
         var kernel = std.ArrayList(u8).empty;
         defer kernel.deinit(allocator);
-        try kernel.appendSlice(allocator, "const std = @import(\"std\");\nconst Ctx = @import(\"rezig_runtime\").ctx.Ctx;\n\nfn logImport(comptime name: []const u8, comptime index: usize, ctx: *const Ctx) void {\n    std.debug.print(\"import {s}[{d}] lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X} r6=0x{X}\\n\", .{ name, index, ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5], ctx.gpr[6] });\n}\n\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
+        try kernel.appendSlice(allocator, "const std = @import(\"std\");\nconst Ctx = @import(\"rezig_runtime\").ctx.Ctx;\n\nfn logImport(comptime name: []const u8, comptime index: u16, ctx: *const Ctx) void {\n    std.debug.print(\"import {s}[0x{X}] lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X} r6=0x{X}\\n\", .{ name, index, ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5], ctx.gpr[6] });\n}\n\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
         if (key) |k| {
             const raw = Io.Dir.cwd().readFileAlloc(io, xex_path, allocator, .limited(1 << 40)) catch null;
             if (raw) |bytes| {
@@ -173,9 +173,19 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
                 if (xextool.xex.reader.readBytes(&xex, bytes, keys)) |_| {} else |_| {}
                 for (xex.import_libraries.items) |lib| {
                     const name = std.mem.sliceTo(&lib.name, 0);
-                    for (lib.addresses, 0..) |thunk, oi| {
+                    var pair_index: usize = 0;
+                    while (pair_index + 1 < lib.addresses.len) : (pair_index += 2) {
+                        const thunk = lib.addresses[pair_index + 1];
                         if (thunk == 0) continue;
-                        try kernel.print(allocator, "        0x{X} => {{ logImport(\"{s}\", {d}, ctx); return true; }},\n", .{ thunk, name, oi });
+                        // The thunk's first word is 0xTTTT_ORD: high half is a
+                        // type tag, low half the real import ordinal.
+                        var ordinal: u16 = 0;
+                        const off = @as(i64, thunk) - @as(i64, img.base_address);
+                        if (off >= 0 and off + 4 <= img.bytes.len) {
+                            const word = std.mem.readInt(u32, img.bytes[@intCast(off)..][0..4], .big);
+                            ordinal = @truncate(word);
+                        }
+                        try kernel.print(allocator, "        0x{X} => {{ logImport(\"{s}\", 0x{X}, ctx); return true; }},\n", .{ thunk, name, ordinal });
                     }
                 }
             }
