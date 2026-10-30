@@ -47,8 +47,17 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             },
             .b => |f| {
                 if (f.absolute or f.link) return error.Unsupported;
-                i = try targetIndex(i, f.target, words.len);
-                continue;
+                const target = cur +% f.target;
+                if (target >= entry_addr and target < entry_addr +% @as(u32, @intCast(words.len)) * 4) {
+                    i = try targetIndex(i, f.target, words.len);
+                    continue;
+                }
+                const callee = lookup(table, target) orelse {
+                    ctx.fault = .{ .kind = .unsupported, .addr = target };
+                    return;
+                };
+                try runTable(ctx, target, callee, table);
+                return;
             },
             .bc => |f| {
                 if (f.absolute or f.link or !ctx_mod.Ctx.supportedBo(f.bo)) return error.Unsupported;
@@ -196,4 +205,20 @@ test "an unsupported instruction stops with a name" {
     var buf: [16]u8 = @splat(0);
     var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
     try testing.expectError(error.Unsupported, run(&ctx, &.{0xfc22182a}));
+}
+
+test "tail call runs the target and returns to the caller" {
+    var buf: [16]u8 = @splat(0);
+    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+
+    // 0x1000: addi r3,r0,1 ; b 0x100C
+    // 0x100C: addi r3,r3,1 ; blr
+    const a = [_]u32{ 0x38600001, 0x48000008 };
+    const b = [_]u32{ 0x38630001, 0x4e800020 };
+    const table = [_]Entry{
+        .{ .addr = 0x1000, .words = &a },
+        .{ .addr = 0x100C, .words = &b },
+    };
+    try runTable(&ctx, 0x1000, &a, &table);
+    try testing.expectEqual(@as(u64, 2), ctx.gpr[3]);
 }

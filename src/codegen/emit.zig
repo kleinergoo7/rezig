@@ -52,7 +52,7 @@ pub fn supports(op: insn) bool {
 /// inside the function and use a supported form.
 pub fn supportsAt(op: insn, at: u32, base: u32, end: u32) bool {
     return switch (op) {
-        .b => |f| !f.absolute and !f.link and inRange(at +% f.target, base, end),
+        .b => |f| !f.absolute and !f.link,
         .bc => |f| !f.absolute and !f.link and runtime.Ctx.supportedBo(f.bo) and inRange(at +% f.target, base, end),
         .bclr => |f| !f.absolute and !f.link and runtime.Ctx.supportedBo(f.bo),
         .bl => |f| !f.absolute,
@@ -133,7 +133,14 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
 
         switch (op) {
             .blr => try out.appendSlice(allocator, "                return;\n"),
-            .b => |f| try out.print(allocator, "                pc = 0x{X};\n", .{addr +% f.target}),
+            .b => |f| {
+                const target = addr +% f.target;
+                if (inRange(target, base, end)) {
+                    try out.print(allocator, "                pc = 0x{X};\n", .{target});
+                } else {
+                    try tailCall(allocator, &out, target);
+                }
+            },
             .bc => |f| try out.print(allocator, "                pc = if (ctx.branch({d}, {d})) 0x{X} else 0x{X};\n", .{
                 f.bo, f.bi, addr +% f.target, next,
             }),
@@ -150,6 +157,10 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
 
     try out.appendSlice(allocator, "            else => return,\n        }\n    }\n}\n");
     return out.toOwnedSlice(allocator);
+}
+
+fn tailCall(allocator: std.mem.Allocator, out: *std.ArrayList(u8), target: u32) !void {
+    try out.print(allocator, "                if (!dispatch(0x{X}, ctx)) {{\n                    ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n                }}\n                return;\n", .{ target, target });
 }
 
 fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: u32) Error!void {
@@ -358,10 +369,12 @@ test "backward branch is accepted" {
     defer testing.allocator.free(text);
 }
 
-test "a branch outside the function is refused" {
+test "a branch outside the function becomes a tail call" {
     // b +0x100 at 0x100 leaves the three-word function.
     const words = [_]u32{ 0x48000100, 0x60000000, 0x4e800020 };
-    try testing.expectError(error.UnsupportedOpcode, function(testing.allocator, &words, .{ .addr = 0x100 }));
+    const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "dispatch(0x200, ctx)") != null);
 }
 
 test "bl calls through dispatch" {
