@@ -6,6 +6,7 @@ const parse = @import("parse.zig");
 const image = @import("../xex/image.zig");
 const analyze = @import("../ppc/analyze.zig");
 const slice = @import("../codegen/slice.zig");
+const pdata_mod = @import("../ppc/pdata.zig");
 const emit = @import("../codegen/emit.zig");
 const abi = @import("../codegen/abi.zig");
 
@@ -19,6 +20,15 @@ pub const header =
     \\
     \\
 ;
+
+fn pdataStarts(allocator: std.mem.Allocator, img: anytype) ![]u32 {
+    for (img.sections) |section| {
+        const n = std.mem.indexOfScalar(u8, &section.name, 0) orelse section.name.len;
+        if (!std.mem.eql(u8, section.name[0..n], ".pdata")) continue;
+        return pdata_mod.starts(allocator, img.sectionBytes(section));
+    }
+    return &.{};
+}
 
 pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !void {
     const xex_path = if (opts.xex) |p|
@@ -54,7 +64,9 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
             picked[i] = .{ .addr = addr, .words = try analyze.functionAt(allocator, sections[0..count], addr, &err_addr) };
         }
     } else {
-        picked = try slice.select(allocator, sections[0..count], img.entry_point, wanted);
+        const starts = try pdataStarts(allocator, img);
+        defer if (starts.len != 0) allocator.free(starts);
+        picked = try slice.select(allocator, sections[0..count], img.entry_point, wanted, starts);
     }
     defer allocator.free(picked);
 

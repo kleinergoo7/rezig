@@ -18,8 +18,9 @@ pub fn select(
     sections: []const analyze.CodeSection,
     entry: u32,
     count: u32,
+    seeds: []const u32,
 ) Error![]Candidate {
-    const found = try analyze.functions(allocator, sections, entry);
+    const found = try analyze.functionsFrom(allocator, sections, entry, seeds);
     defer analyze.freeFunctions(allocator, found);
 
     var picked: std.ArrayList(Candidate) = .empty;
@@ -143,7 +144,7 @@ test "selection closes over calls in address order" {
     defer testing.allocator.free(bytes);
     const sections = [_]analyze.CodeSection{.{ .addr = 0x100, .bytes = bytes }};
 
-    const picked = try select(testing.allocator, &sections, 0x100, 2);
+    const picked = try select(testing.allocator, &sections, 0x100, 2, &.{});
     defer freeCandidates(testing.allocator, picked);
 
     try testing.expectEqual(@as(usize, 3), picked.len);
@@ -159,7 +160,7 @@ test "asking for more than exists fails" {
     defer testing.allocator.free(bytes);
     const sections = [_]analyze.CodeSection{.{ .addr = 0x100, .bytes = bytes }};
 
-    try testing.expectError(error.NotEnoughFunctions, select(testing.allocator, &sections, 0x100, 2));
+    try testing.expectError(error.NotEnoughFunctions, select(testing.allocator, &sections, 0x100, 2, &.{}));
 }
 
 test "address list round trips" {

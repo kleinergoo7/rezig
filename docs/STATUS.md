@@ -55,6 +55,13 @@ Two facts this exposed:
 - Guest truth: no Xenia or Unicorn traces exist in the repo, so the differential proves lowering,
   not PPC semantics.
 
+## Whole-image budget
+
+- 1,000 emitted functions: 1.0 s to compile, 163 MB peak RSS, 16.8 MB Debug object.
+- Projected 24,000 functions: about 24 s, 4 GB RSS, 400 MB object, if scaling stays linear.
+- Chunked compilation is therefore viable. The limit today is coverage, not compiler cost:
+  call-closed selection tops out near 1,200 functions because call targets must be emittable too.
+
 ## Conversion
 
 `rezig xex` links the reader, writer, packer and LZX from the GPL Zig port of XexTool. The
@@ -85,11 +92,11 @@ Done and verified on the real disc:
 - ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
 - codegen: 50 functions from `tests/slice/addresses.json`, `zig fmt` clean.
-- coverage: 1,039 discovered functions, 126,876 instructions. Decoder 86.88%, emitter 86.76%,
-  121 functions fully emittable. Single-precision float is done: `lfs`, `stfs`, `fadd`, `fsub`,
-  `fmul`, `fdiv`, `fcmpu`. `bl`, out-of-function `b` and conditional tail `bc` lower through
-  `dispatch`. Remaining gaps are VMX (`vor`, `lvx`, `stvx`, `vaddfp`, `vxor`) and 16,637
-  undecoded words, mostly primary opcodes 31, 62, 04, 58 and 40. Reproduce with
+- coverage, now seeded from `.pdata`: 24,513 function starts, 28,038 discovered functions,
+  1,800,711 unique instructions = 76.73% of `.text` (2,346,754 words). 83.77% of instruction
+  instances decode, 83.56% emit, 2,913 functions are fully emittable. Single-precision float is
+  done. Remaining gaps are VMX (`vor` 5,131, `vaddfp` 2,263, `lvx`, `stvx`) and 581,975 undecoded
+  instruction instances, mostly primary opcodes 31, 62, 04, 58 and 40. Reproduce with
   `zig build coverage -Dxex=<xex>`.
 - gate: 50 functions x 64 seeded cases = 3200 differential cases, emitted Zig vs the interpreter,
   PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte. The slice includes

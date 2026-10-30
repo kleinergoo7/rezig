@@ -26,6 +26,17 @@ pub fn functions(
     sections: []const CodeSection,
     entry: u32,
 ) Error![]Function {
+    return functionsFrom(allocator, sections, entry, &.{});
+}
+
+/// Like `functions`, but also starts scanning from every address in `seeds`,
+/// such as `.pdata` function starts.
+pub fn functionsFrom(
+    allocator: std.mem.Allocator,
+    sections: []const CodeSection,
+    entry: u32,
+    seeds: []const u32,
+) Error![]Function {
     var found: std.ArrayList(Function) = .empty;
     errdefer {
         for (found.items) |f| {
@@ -42,6 +53,7 @@ pub fn functions(
     defer queue.deinit(allocator);
 
     try enqueue(allocator, &queue, &seen, entry);
+    for (seeds) |seed| try enqueue(allocator, &queue, &seen, seed);
 
     while (queue.pop()) |addr| {
         // Discovery is structural: scan to blr without requiring every word to decode.

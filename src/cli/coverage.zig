@@ -5,6 +5,7 @@ const Io = std.Io;
 const parse = @import("parse.zig");
 const image = @import("../xex/image.zig");
 const ppc_analyze = @import("../ppc/analyze.zig");
+const pdata_mod = @import("../ppc/pdata.zig");
 const decode = @import("../ppc/decode.zig");
 const emit = @import("../codegen/emit.zig");
 
@@ -108,8 +109,39 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         count += 1;
     }
 
-    const functions = try ppc_analyze.functions(allocator, sections[0..count], img.entry_point);
+    const starts = try pdataStarts(allocator, img);
+    defer if (starts.len != 0) allocator.free(starts);
+    const functions = try ppc_analyze.functionsFrom(allocator, sections[0..count], img.entry_point, starts);
     defer ppc_analyze.freeFunctions(allocator, functions);
+
+    var text_words: u64 = 0;
+    for (sections[0..count]) |section| text_words += section.bytes.len / 4;
+
+    var offsets = try allocator.alloc(usize, count);
+    defer allocator.free(offsets);
+    var running: usize = 0;
+    for (sections[0..count], 0..) |section, i| {
+        offsets[i] = running;
+        running += section.bytes.len / 4;
+    }
+    const seen = try allocator.alloc(bool, running);
+    defer allocator.free(seen);
+    @memset(seen, false);
+    var unique: u64 = 0;
+    for (functions) |function| {
+        for (0..function.words.len) |i| {
+            const addr = function.addr + @as(u32, @intCast(i)) * 4;
+            for (sections[0..count], 0..) |section, si| {
+                if (addr < section.addr or addr >= section.addr + section.bytes.len) continue;
+                const index = offsets[si] + (addr - section.addr) / 4;
+                if (!seen[index]) {
+                    seen[index] = true;
+                    unique += 1;
+                }
+                break;
+            }
+        }
+    }
 
     const summary = try collect(allocator, functions);
     defer allocator.free(summary.missing);
@@ -118,8 +150,19 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     var writer = Io.File.stdout().writer(io, &buf);
     const out = &writer.interface;
 
+    try out.print("pdata starts: {d}\n", .{starts.len});
+    try out.print("text words: {d}\n", .{text_words});
     try out.print("functions: {d}\n", .{summary.functions});
-    try out.print("instructions: {d}\n", .{summary.instructions});
+    try out.print("instructions: {d} ({d}.{d:0>2}% of .text)\n", .{
+        summary.instructions,
+        percent(summary.instructions, text_words),
+        percent100(summary.instructions, text_words),
+    });
+    try out.print("unique instructions: {d} ({d}.{d:0>2}% of .text)\n", .{
+        unique,
+        percent(unique, text_words),
+        percent100(unique, text_words),
+    });
     try out.print("decoded: {d} ({d}.{d:0>2}%)\n", .{
         summary.decoded,
         percent(summary.decoded, summary.instructions),
@@ -159,6 +202,15 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         }
     }
     try out.flush();
+}
+
+fn pdataStarts(allocator: std.mem.Allocator, img: anytype) ![]u32 {
+    for (img.sections) |section| {
+        const n = std.mem.indexOfScalar(u8, &section.name, 0) orelse section.name.len;
+        if (!std.mem.eql(u8, section.name[0..n], ".pdata")) continue;
+        return pdata_mod.starts(allocator, img.sectionBytes(section));
+    }
+    return &.{};
 }
 
 fn percent(part: u64, whole: u64) u64 {
