@@ -22,8 +22,6 @@ pub const usage =
     \\  imports   List the XEX import libraries and thunk addresses
     \\  xex       Rewrite an XEX as an unencrypted, uncompressed copy
     \\  codegen   Emit Zig source for selected guest functions
-    \\  build     Build the generated project
-    \\  run       Run the generated project
     \\  help      Show this message
     \\
     \\extract options:
@@ -158,11 +156,6 @@ pub fn run(
                 return 1;
             };
             return 0;
-        },
-        .build, .run => {
-            try err.writeAll("rezig: command not implemented yet\n");
-            try err.flush();
-            return 1;
         },
     }
 }

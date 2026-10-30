@@ -92,15 +92,41 @@ pub const Ctx = struct {
         self.writeCrField(crf, field);
     }
 
-    /// `fcmpu`: unordered comparisons clear LT/GT/EQ. XER.SO is not modelled.
+    /// Sets one CR field from a 32-bit integer compare.
+    pub fn setCr32(self: *Ctx, crf: u3, a: u64, b: u64, signed: bool) void {
+        if (signed) {
+            const x: i64 = @as(i32, @bitCast(@as(u32, @truncate(a))));
+            const y: i64 = @as(i32, @bitCast(@as(u32, @truncate(b))));
+            self.setCr(crf, @bitCast(x), @bitCast(y), true);
+        } else {
+            self.setCr(crf, @as(u32, @truncate(a)), @as(u32, @truncate(b)), false);
+        }
+    }
+
+    /// `fcmpu`: NaN sets the unordered bit (FU). XER.SO is not modelled.
     pub fn setCrFloat(self: *Ctx, crf: u3, a: f64, b: f64) void {
         var field: u32 = 0;
-        if (!(std.math.isNan(a) or std.math.isNan(b))) {
+        if (std.math.isNan(a) or std.math.isNan(b)) {
+            field |= 0b0001;
+        } else {
             if (a < b) field |= 0b1000;
             if (a > b) field |= 0b0100;
             if (a == b) field |= 0b0010;
         }
         self.writeCrField(crf, field);
+    }
+
+    /// `fctiwz`: leaves the 32-bit integer bit pattern in the FPR. Out of range
+    /// and NaN produce the hardware sentinel 0x80000000.
+    pub fn fctiwz(_: *Ctx, value: f64) f64 {
+        var result: i32 = -2147483648;
+        if (std.math.isFinite(value)) {
+            const truncated = @trunc(value);
+            if (truncated >= -2147483648.0 and truncated <= 2147483647.0) {
+                result = @intFromFloat(truncated);
+            }
+        }
+        return @bitCast(@as(u64, @bitCast(@as(i64, result))));
     }
 
     fn writeCrField(self: *Ctx, crf: u3, field: u32) void {
@@ -390,6 +416,7 @@ test "setCrFloat sets LT, GT, EQ and unordered" {
     try std.testing.expectEqual(@as(u1, 0), ctx.crBit(8));
     try std.testing.expectEqual(@as(u1, 0), ctx.crBit(9));
     try std.testing.expectEqual(@as(u1, 0), ctx.crBit(10));
+    try std.testing.expectEqual(@as(u1, 1), ctx.crBit(11));
 }
 
 test "setCr writes the requested field only" {

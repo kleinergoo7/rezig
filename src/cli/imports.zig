@@ -17,8 +17,9 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     const bytes = try Io.Dir.cwd().readFileAlloc(io, xex_path, allocator, .limited(1 << 40));
     defer allocator.free(bytes);
 
-    const user_key = key orelse return error.KeyMissing;
-    const keys = xextool.xex.keys.Keys.uniform(user_key);
+    // Import tables live in the unencrypted header, so a key is only needed
+    // when the image itself is encrypted.
+    const keys = xextool.xex.keys.Keys.uniform(key orelse std.mem.zeroes([16]u8));
 
     var xex = xextool.xex.model.Xex.init(allocator);
     defer xex.deinit();
@@ -29,21 +30,21 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     var writer = Io.File.stdout().writer(io, &buf);
     const out = &writer.interface;
 
-    try out.print("imports: {d} libraries\\n", .{xex.import_libraries.items.len});
+    try out.print("imports: {d} libraries\n", .{xex.import_libraries.items.len});
     for (xex.import_libraries.items) |lib| {
         const name = std.mem.sliceTo(&lib.name, 0);
-        try out.print("  {s} (module {d}, version {d}.{d}, {d} thunks)\\n", .{
+        try out.print("  {s} (module {d}, version {d}.{d}, {d} thunks)\n", .{
             name,
             lib.module_number,
             lib.version >> 16,
             lib.version & 0xffff,
-            lib.addresses.len,
+            lib.addresses.len / 2,
         });
         for (lib.addresses, 0..) |addr, i| {
             if (i < 4 or i + 1 == lib.addresses.len) {
-                try out.print("    0x{X:0>8}\\n", .{addr});
+                try out.print("    0x{X:0>8}\n", .{addr});
             } else if (i == 4) {
-                try out.print("    ...\\n", .{});
+                try out.print("    ...\n", .{});
             }
         }
     }

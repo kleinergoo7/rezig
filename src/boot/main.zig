@@ -3,6 +3,7 @@
 const std = @import("std");
 const Io = std.Io;
 const image = @import("rezig_image").image;
+const aes = @import("rezig_image").aes;
 const Ctx = @import("rezig_runtime").ctx.Ctx;
 const slice = @import("slice");
 
@@ -12,11 +13,18 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(args);
 
     if (args.len < 2) {
-        std.debug.print("usage: boot <xex>\n", .{});
+        std.debug.print("usage: boot <xex> [key]\n", .{});
         return;
     }
 
-    var img = try image.load(gpa, init.io, args[1], null);
+    var key: ?[16]u8 = null;
+    if (args.len >= 3) {
+        var loaded: [16]u8 = undefined;
+        try aes.loadKey(init.io, args[2], &loaded);
+        key = loaded;
+    }
+
+    var img = try image.load(gpa, init.io, args[1], key);
     defer img.deinit(gpa);
 
     var ctx = Ctx.init(.{ .base = img.base_address, .data = img.bytes });

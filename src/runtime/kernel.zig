@@ -12,9 +12,9 @@ pub fn apply(name: []const u8, ordinal: u16, ctx: *Ctx) void {
         0x194 => ctx.gpr[3] = 1,
         // ExGetXConfigSetting: success, zero the output buffer.
         0x10 => {
-            const out = ctx.gpr[5];
-            const size = ctx.gpr[6];
-            var i: u64 = 0;
+            const out: u32 = @truncate(ctx.gpr[5]);
+            const size: u32 = @intCast(@min(ctx.gpr[6], 0x1000));
+            var i: u32 = 0;
             while (i < size) : (i += 1) ctx.store8(out +% i, 0);
             ctx.gpr[3] = 0;
         },

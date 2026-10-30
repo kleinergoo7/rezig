@@ -76,11 +76,12 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
             if (!emit.supportsAll(f.addr, f.words)) continue;
             const words = try allocator.dupe(u32, f.words);
             errdefer allocator.free(words);
-            _ = emit.function(allocator, words, .{ .addr = f.addr, .external_dispatch = true }) catch |e| {
+            const text = emit.function(allocator, words, .{ .addr = f.addr, .external_dispatch = true }) catch |e| {
                 std.debug.print("codegen fail addr 0x{X}: {s}\n", .{ f.addr, @errorName(e) });
                 allocator.free(words);
                 continue;
             };
+            allocator.free(text);
             try list.append(allocator, .{ .addr = f.addr, .words = words });
         }
         picked = try list.toOwnedSlice(allocator);
@@ -88,7 +89,10 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         const wanted = opts.slice orelse return error.MissingOption;
         picked = try slice.select(allocator, sections[0..count], img.entry_point, wanted, starts);
     }
-    defer allocator.free(picked);
+    defer {
+        for (picked) |candidate| allocator.free(candidate.words);
+        allocator.free(picked);
+    }
 
     if (opts.all == true) {
         const chunk_size: usize = 1000;
@@ -163,30 +167,31 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         var kernel = std.ArrayList(u8).empty;
         defer kernel.deinit(allocator);
         try kernel.appendSlice(allocator, "const std = @import(\"std\");\nconst Ctx = @import(\"rezig_runtime\").ctx.Ctx;\n\nfn logImport(comptime name: []const u8, comptime index: u16, ctx: *const Ctx) void {\n    std.debug.print(\"import {s}[0x{X}] lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X} r6=0x{X}\\n\", .{ name, index, ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5], ctx.gpr[6] });\n}\n\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
-        if (key) |k| {
-            const raw = Io.Dir.cwd().readFileAlloc(io, xex_path, allocator, .limited(1 << 40)) catch null;
-            if (raw) |bytes| {
-                defer allocator.free(bytes);
-                var xex = xextool.xex.model.Xex.init(allocator);
-                defer xex.deinit();
-                const keys = xextool.xex.keys.Keys.uniform(k);
-                if (xextool.xex.reader.readBytes(&xex, bytes, keys)) |_| {} else |_| {}
-                for (xex.import_libraries.items) |lib| {
-                    const name = std.mem.sliceTo(&lib.name, 0);
-                    var pair_index: usize = 0;
-                    while (pair_index + 1 < lib.addresses.len) : (pair_index += 2) {
-                        const thunk = lib.addresses[pair_index + 1];
-                        if (thunk == 0) continue;
-                        // The thunk's first word is 0xTTTT_ORD: high half is a
-                        // type tag, low half the real import ordinal.
-                        var ordinal: u16 = 0;
-                        const off = @as(i64, thunk) - @as(i64, img.base_address);
-                        if (off >= 0 and off + 4 <= img.bytes.len) {
-                            const word = std.mem.readInt(u32, img.bytes[@intCast(off)..][0..4], .big);
-                            ordinal = @truncate(word);
-                        }
-                        try kernel.print(allocator, "        0x{X} => {{ logImport(\"{s}\", 0x{X}, ctx); return true; }},\n", .{ thunk, name, ordinal });
+        // Import tables live in the unencrypted header. A key is only needed
+        // when the payload is encrypted; `image.load` already handled that.
+        const import_key = key orelse std.mem.zeroes([16]u8);
+        const raw = Io.Dir.cwd().readFileAlloc(io, xex_path, allocator, .limited(1 << 40)) catch null;
+        if (raw) |bytes| {
+            defer allocator.free(bytes);
+            var xex = xextool.xex.model.Xex.init(allocator);
+            defer xex.deinit();
+            const keys = xextool.xex.keys.Keys.uniform(import_key);
+            if (xextool.xex.reader.readBytes(&xex, bytes, keys)) |_| {} else |_| {}
+            for (xex.import_libraries.items) |lib| {
+                const name = std.mem.sliceTo(&lib.name, 0);
+                var pair_index: usize = 0;
+                while (pair_index + 1 < lib.addresses.len) : (pair_index += 2) {
+                    const thunk = lib.addresses[pair_index + 1];
+                    if (thunk == 0) continue;
+                    // The thunk's first word is 0xTTTT_ORD: high half is a
+                    // type tag, low half the real import ordinal.
+                    var ordinal: u16 = 0;
+                    const off = @as(i64, thunk) - @as(i64, img.base_address);
+                    if (off >= 0 and off + 4 <= img.bytes.len) {
+                        const word = std.mem.readInt(u32, img.bytes[@intCast(off)..][0..4], .big);
+                        ordinal = @truncate(word);
                     }
+                    try kernelCase(allocator, &kernel, thunk, name, ordinal);
                 }
             }
         }
@@ -264,4 +269,24 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     var writer = Io.File.stdout().writer(io, &buf);
     try writer.interface.print("emitted {d} functions to {s}/slice.zig\n", .{ picked.len, opts.out });
     try writer.interface.flush();
+}
+
+fn kernelCase(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    thunk: u32,
+    name: []const u8,
+    ordinal: u16,
+) !void {
+    try out.print(allocator, "        0x{X} => {{ const Seen = struct {{ var value: bool = false; }}; if (!Seen.value) {{ Seen.value = true; logImport(\"{f}\", 0x{X}, ctx); }} @import(\"rezig_runtime\").kernel.apply(\"{f}\", 0x{X}, ctx); return true; }},\n", .{
+        thunk, std.zig.fmtString(name), ordinal, std.zig.fmtString(name), ordinal,
+    });
+}
+
+test "kernel case escapes the library name" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+    try kernelCase(std.testing.allocator, &out, 0x1000, "x\"y\n", 0x10);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\\\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\\n") != null);
 }

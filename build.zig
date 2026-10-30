@@ -27,6 +27,16 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the rezig CLI");
     run_step.dependOn(&run_cmd.step);
 
+    const test_ppc = b.createModule(.{
+        .root_source_file = b.path("src/ppc/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const test_runtime = b.createModule(.{
+        .root_source_file = b.path("src/runtime/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("test.zig"),
@@ -36,8 +46,20 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "xextool", .module = xextool }},
         }),
     });
+    const interp_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interp/interp.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "rezig_ppc", .module = test_ppc },
+                .{ .name = "rezig_runtime", .module = test_runtime },
+            },
+        }),
+    });
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+    test_step.dependOn(&b.addRunArtifact(interp_tests).step);
 
     const opts = readOptions(b);
     addExtractStep(b, exe, opts);
@@ -227,6 +249,7 @@ fn addBootStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, targe
     const boot_exe = b.addExecutable(.{ .name = "rezig-boot", .root_module = boot_module });
     const run = b.addRunArtifact(boot_exe);
     run.addArg(xex);
+    if (opts.key) |key| run.addArg(key);
     step.dependOn(&run.step);
 }
 

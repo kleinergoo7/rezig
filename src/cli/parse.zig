@@ -14,9 +14,6 @@ pub const Codegen = struct {
     slice: ?u32,
     slice_list: ?[]const u8,
 };
-pub const Build = struct { tree: []const u8 };
-pub const Run = struct { tree: []const u8 };
-
 pub const Command = union(enum) {
     extract: Extract,
     analyze: Analyze,
@@ -24,8 +21,6 @@ pub const Command = union(enum) {
     xex_convert: Xex,
     codegen: Codegen,
     imports: Analyze,
-    build: Build,
-    run: Run,
     help,
 };
 
@@ -155,12 +150,6 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
         const has_xex = opts.xex != null;
         if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
         return .{ .imports = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
-    }
-    if (std.mem.eql(u8, name, "build") or std.mem.eql(u8, name, "run")) {
-        const tree = try opts.require("tree");
-        try opts.rejectUnused(&.{ "iso", "in", "out", "key", "xex", "slice", "slice_list", "all" });
-        if (std.mem.eql(u8, name, "build")) return .{ .build = .{ .tree = tree } };
-        return .{ .run = .{ .tree = tree } };
     }
     return error.UnknownCommand;
 }

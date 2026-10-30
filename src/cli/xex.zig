@@ -31,7 +31,10 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     defer out.deinit(allocator);
     try xextool.xex.writer.write(&xex, &out, keys);
 
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = opts.out, .data = out.data() });
+    var atomic = try Io.Dir.cwd().createFileAtomic(io, opts.out, .{ .replace = true, .make_path = true });
+    defer atomic.deinit(io);
+    try atomic.file.writeStreamingAll(io, out.data());
+    try atomic.replace(io);
 
     var buf: [1024]u8 = undefined;
     var writer = Io.File.stdout().writer(io, &buf);

@@ -25,6 +25,7 @@ pub const Error = error{
     TooManyEntries,
     DirectoryCycle,
     DuplicatePath,
+    InvalidName,
     PathTooLong,
     TooDeep,
     AccessDenied,
@@ -165,8 +166,12 @@ fn Walker(comptime S: type) type {
             depth: u8,
             seen_nodes: *std.AutoHashMapUnmanaged(u32, void),
         ) Error!void {
-            var offset: ?u32 = start;
-            while (offset) |off| {
+            // Explicit stack: a long left chain must not consume call frames.
+            var stack: std.ArrayList(u32) = .empty;
+            defer stack.deinit(self.allocator);
+            try stack.append(self.allocator, start);
+
+            while (stack.pop()) |off| {
                 if (@as(usize, off) + 14 > table.len) return error.Truncated;
 
                 const gop = try seen_nodes.getOrPut(self.allocator, off);
@@ -183,6 +188,7 @@ fn Walker(comptime S: type) type {
                 if (name_len == 0) return error.NotXdvdfs;
                 if (@as(usize, off) + 14 + name_len > table.len) return error.Truncated;
                 const name = rec[14..][0..name_len];
+                if (!isSafeName(name)) return error.InvalidName;
 
                 if (attr & 0x10 != 0) {
                     try self.checkDirEntry(sector, size);
@@ -194,8 +200,9 @@ fn Walker(comptime S: type) type {
                     try self.addFile(prefix, name, sector, size);
                 }
 
-                if (left) |child| try self.walkNode(table, child, prefix, depth, seen_nodes);
-                offset = right;
+                // LIFO: push right first so the left subtree keeps the old order.
+                if (right) |child| try stack.append(self.allocator, child);
+                if (left) |child| try stack.append(self.allocator, child);
             }
         }
 
@@ -305,6 +312,32 @@ test "directory linking back to its ancestor is rejected" {
     try testing.expectError(error.DirectoryCycle, vol.walk(testing.allocator, iso_writer.Image, &img, io));
 }
 
+test "a name with a path separator is rejected" {
+    const io = testIo();
+    var img = try iso_writer.build(testing.allocator, 0);
+    defer img.deinit(testing.allocator);
+
+    const root = img.bytes[iso_writer.ROOT_SECTOR * iso_writer.SECTOR ..];
+    root[48 + 13] = 4;
+    @memcpy(root[48 + 14 ..][0..4], "../x");
+
+    const vol = try open(iso_writer.Image, &img, io);
+    try testing.expectError(error.InvalidName, vol.walk(testing.allocator, iso_writer.Image, &img, io));
+}
+
+test "a dot-dot name is rejected" {
+    const io = testIo();
+    var img = try iso_writer.build(testing.allocator, 0);
+    defer img.deinit(testing.allocator);
+
+    const root = img.bytes[iso_writer.ROOT_SECTOR * iso_writer.SECTOR ..];
+    root[48 + 13] = 2;
+    @memcpy(root[48 + 14 ..][0..2], "..");
+
+    const vol = try open(iso_writer.Image, &img, io);
+    try testing.expectError(error.InvalidName, vol.walk(testing.allocator, iso_writer.Image, &img, io));
+}
+
 test "deep nesting is rejected" {
     const io = testIo();
     var img = try iso_writer.buildDeep(testing.allocator, 0, 40);
@@ -326,6 +359,16 @@ fn find(entries: []const Entry, path: []const u8) ?Entry {
         if (std.mem.eql(u8, e.path, path)) return e;
     }
     return null;
+}
+
+/// XDVDFS names are one path component. Reject separators, NUL and dot names.
+fn isSafeName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+    for (name) |c| {
+        if (c == '/' or c == '\\' or c == 0) return false;
+    }
+    return true;
 }
 
 fn linkOffset(units: u16) ?u32 {

@@ -77,6 +77,7 @@ pub fn functionsFrom(
         var calls: std.ArrayList(u32) = .empty;
         errdefer calls.deinit(allocator);
 
+        const end = addr +% @as(u32, @intCast(words.len)) *% 4;
         var i: usize = 0;
         while (i < words.len) : (i += 1) {
             const insn = decode.decode(words[i]) catch continue;
@@ -84,6 +85,23 @@ pub fn functionsFrom(
                 const target = addr +% @as(u32, @intCast(i)) *% 4 +% rel;
                 try calls.append(allocator, target);
                 try enqueue(allocator, &queue, &seen, target);
+            }
+            switch (insn) {
+                .b => |f| {
+                    const target = addr +% @as(u32, @intCast(i)) *% 4 +% f.target;
+                    if (!f.absolute and (target < addr or target >= end)) {
+                        try calls.append(allocator, target);
+                        try enqueue(allocator, &queue, &seen, target);
+                    }
+                },
+                .bc => |f| {
+                    const target = addr +% @as(u32, @intCast(i)) *% 4 +% f.target;
+                    if (!f.absolute and (target < addr or target >= end)) {
+                        try calls.append(allocator, target);
+                        try enqueue(allocator, &queue, &seen, target);
+                    }
+                },
+                else => {},
             }
         }
 
@@ -127,6 +145,14 @@ fn scanAtBounded(allocator: std.mem.Allocator, sections: []const CodeSection, ad
         const at = index * 4;
         const word = std.mem.readInt(u32, section.bytes[at..][0..4], .big);
         if (bound != 0 and section.addr + @as(u32, @intCast(at)) >= bound) {
+            // Trailing zeros are alignment padding up to the next `.pdata` start.
+            while (words.items.len != 0 and words.items[words.items.len - 1] == 0) {
+                words.items.len -= 1;
+            }
+            return words.toOwnedSlice(allocator);
+        }
+        // Without a `.pdata` bound, a zero word after real code ends the block.
+        if (bound == 0 and word == 0 and words.items.len != 0) {
             return words.toOwnedSlice(allocator);
         }
         try words.append(allocator, word);
@@ -223,6 +249,8 @@ test "discovers reached functions and their calls" {
     try testing.expectEqual(@as(u32, 0x120), list[1].addr);
     try testing.expectEqual(@as(usize, 1), list[0].calls.len);
     try testing.expectEqual(@as(u32, 0x120), list[0].calls[0]);
+    try testing.expectEqual(@as(usize, 1), list[0].calls.len);
+    try testing.expectEqual(@as(u32, 0x120), list[0].calls[0]);
 }
 
 test "address outside every section is out of range" {
@@ -244,6 +272,39 @@ test "a function without blr reports its address" {
     try testing.expectError(error.NoTerminator, functionAt(testing.allocator, &sections, 0x100, &err_addr));
     try testing.expectEqual(@as(u32, 0x100 + max_function_insns * 4), err_addr);
     _ = &code;
+}
+
+test "a pdata bound keeps a zero word inside the body" {
+    // addi; 0; addi; blr. The zero is inside the bounded body.
+    const code = [_]u32{ 0x38600001, 0, 0x38600002, ret };
+    const bytes = try beBytes(testing.allocator, &code);
+    defer testing.allocator.free(bytes);
+    const sections = [_]CodeSection{.{ .addr = 0x100, .bytes = bytes }};
+
+    const list = try functionsFrom(testing.allocator, &sections, 0x100, &.{ 0x100, 0x110 });
+    defer freeFunctions(testing.allocator, list);
+
+    try testing.expectEqual(@as(usize, 1), list.len);
+    try testing.expectEqual(@as(usize, 4), list[0].words.len);
+}
+
+test "a tail branch to an unknown address is discovered" {
+    // 0x100: b 0x120; 0x104: zero padding; 0x120: addi; blr.
+    var code = [_]u32{ 0x48000020, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    code[8] = 0x38600001;
+    code[9] = ret;
+    const bytes = try beBytes(testing.allocator, &code);
+    defer testing.allocator.free(bytes);
+    const sections = [_]CodeSection{.{ .addr = 0x100, .bytes = bytes }};
+
+    const list = try functionsFrom(testing.allocator, &sections, 0x100, &.{});
+    defer freeFunctions(testing.allocator, list);
+
+    try testing.expectEqual(@as(usize, 2), list.len);
+    try testing.expectEqual(@as(u32, 0x100), list[0].addr);
+    try testing.expectEqual(@as(u32, 0x120), list[1].addr);
+    try testing.expectEqual(@as(usize, 1), list[0].calls.len);
+    try testing.expectEqual(@as(u32, 0x120), list[0].calls[0]);
 }
 
 test "an undecodable word reports its address" {

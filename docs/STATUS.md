@@ -2,12 +2,12 @@
 
 ## Current phase
 
-P0 complete: clean extraction, whole-image measurement, and a 50-function differential slice.
+P0 pipeline complete: clean extraction, whole-image measurement, and a 50-function differential slice. Boot is early.
 
 ## Done
 
 - Repository scaffold, Zig 0.17.0 pinned.
-- CLI parsing (`extract`, `analyze`, `xex`, `codegen`, `build`, `run`, `help`).
+- CLI parsing (`extract`, `analyze`, `coverage`, `imports`, `xex`, `codegen`, `help`).
 - XDVDFS reader, XEX2 header parser, AES-128-CBC, XEX image decrypt + basic decompress + PE parse.
 - `zig build extract` and `zig build analyze`.
 - Key resolution: `--key`, then `REZIG_XEX_KEY`, then `~/.config/rezig/xex.key`. No key ships
@@ -59,9 +59,9 @@ Two facts this exposed:
 
 - 1,000 emitted functions: 1.0 s to compile, 163 MB peak RSS, 16.8 MB Debug object.
 - A single 82.3 MB file does not compile: the compiler misreports type errors past roughly
-  2,000 functions, so `codegen --all` emits 16 chunks of ~1,000 functions plus a central
+  2,000 functions, so `codegen --all` emits chunks of ~1,000 functions plus a central
   `dispatch.zig`.
-- All 17,448 supported functions compile and link in 18 chunks.
+- All 24,538 supported functions compile and link in 25 chunks.
 - The chunked build caught six emitter bugs the 50-function gate could not: two missing
   parentheses, `mulli`/`extsh`/`extsb`/`extsw` sign conversions, an `&`-vs-`+%` precedence fault
   in every address computation, and a 64-bit carry in `stwu` updates.
@@ -69,20 +69,25 @@ Two facts this exposed:
 
 ## Boot trace
 
-`zig build boot -Dxex=<xex> -Dkey=<key>` builds the whole image and runs the XEX entry point
-against stub imports. It reaches seven kernel imports and then calls an invalid indirect target:
+`zig build boot -Dxex=<xex> [-Dkey=<key>]` builds the whole image and runs the XEX entry point
+against stub imports. Each import is logged once. The current trace reaches seventeen imports
+and then branches to address zero:
 
 ```
-import xboxkrnl.exe[28]
-import xboxkrnl.exe[207]
-import xboxkrnl.exe[179]
-import xam.xex[11]
-...
-boot: fault unsupported at 0x8218BEA8
+import xboxkrnl.exe[0x125] ... import xboxkrnl.exe[0x130] ...
+import xboxkrnl.exe[0x194] ... import xam.xex[0x3CB] ...
+import xboxkrnl.exe[0x10]  ... import xboxkrnl.exe[0x152] ...
+import xboxkrnl.exe[0x155] ... import xam.xex[0x282] ...
+import xam.xex[0x33]       ... import xam.xex[0x2] ...
+import xboxkrnl.exe[0xD1]  ... import xboxkrnl.exe[0x110] ...
+import xam.xex[0x3D1]      ... import xboxkrnl.exe[0x52] ...
+import xboxkrnl.exe[0x154] ... import xboxkrnl.exe[0x3] ...
+import xam.xex[0x1A9]
+boot: fault unsupported at 0x0
 ```
 
-The stubs return success without setting `r3`, so guest code that consumes a return value
-dereferences garbage. The next step is real kernel behaviour, not more codegen.
+Most stubs still return without setting `r3`. The next step is real kernel behaviour: memory,
+threads and the XAM calls that return pointers or handles.
 
 ## Conversion
 
@@ -114,13 +119,12 @@ Done and verified on the real disc:
 - ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
 - codegen: 50 functions from `tests/slice/addresses.json`, `zig fmt` clean.
-- coverage, now seeded from `.pdata`: 24,513 starts bound to the next start, 29,555 discovered
-  functions, 2,086,758 unique instructions = 88.92% of `.text` (2,346,754 words). 94.86% of
-  instruction instances decode and emit, 17,448 functions are fully emittable (59.03%). Integer, single-precision
-  float, branches, calls, tail calls and the five decoded VMX ops (`vor`, `vxor`, `vaddfp`,
-  `lvx`, `stvx`) are lowered. The remaining limit is decoding: 581,975 instruction instances,
-  mostly primary opcodes 31, 62, 04, 58 and 40. `coverage` now prints the top
-  undecoded forms by primary opcode and extension field, with a sample word. Reproduce with
+- coverage, now seeded from `.pdata` and following tail branches: 24,513 starts, 34,545
+  discovered functions, 2,124,676 unique instructions = 90.53% of `.text` (2,346,754 words).
+  95.00% of instruction instances decode, 94.94% emit, and 24,538 functions are fully
+  emittable (71.03%). The remaining limit is decoding: 109,326 instruction instances,
+  mostly primary opcodes 04, 05, 03 and 31. `coverage` prints the top undecoded forms by
+  primary opcode and extension field, with a sample word. Reproduce with
   `zig build coverage -Dxex=<xex>`.
 - gate: 50 functions x 64 seeded cases = 3200 differential cases, emitted Zig vs the interpreter,
   PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte. The slice includes
@@ -132,6 +136,7 @@ Done and verified on the real disc:
   instructions. The gate therefore exercises them through unit and golden tests, not GTA IV
   code.
 - portability: x86_64-windows and aarch64-linux objects build.
+- boot: reaches seventeen imports and stops on a zero indirect target after `xam[0x1A9]`.
 
 ## Bugs the differential found
 
@@ -150,12 +155,14 @@ Done and verified on the real disc:
 - Neither side is guest truth. That still needs an independent CPU (Xenia, or Unicorn for single
   instructions).
 
-## Remaining for P0
+## Remaining
 
 - Guest-truth traces, if wanted.
-- `build.zig` still has near-duplicate step helpers.
+- Kernel behaviour: memory, threads, events, files, timing and the XAM surface.
+- Decoder gaps: primary opcodes 04, 05, 03 and the remaining `bclr`/`bc` forms.
+- GPU, audio, input and saves.
 
 ## Next
 
-P1: float/VMX, out-of-function `b` (tail calls), then the undecoded primary opcodes and
-whole-image emission. Branches, loops, conditional returns and direct calls are done.
+Kernel HLE: make the imports reached by the boot trace return valid pointers and handles.
+Then work the next fault from the trace.

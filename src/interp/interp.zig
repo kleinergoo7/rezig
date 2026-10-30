@@ -82,7 +82,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .bclr => |f| {
                 if (f.absolute or !ctx_mod.Ctx.supportedBo(f.bo)) return error.Unsupported;
                 if (f.link) {
-                    if (f.bo != 20) return error.Unsupported;
+                    if (!f.to_ctr or f.bo != 20) return error.Unsupported;
                     const target = ctx.ctr;
                     ctx.lr = cur +% 4;
                     const callee = lookup(table, target) orelse {
@@ -92,6 +92,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                     try runTable(ctx, target, callee, table);
                     return;
                 }
+                if (f.to_ctr) return error.Unsupported;
                 if (ctx.branch(f.bo, f.bi)) return;
                 i += 1;
                 continue;
@@ -106,13 +107,34 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 ctx.gpr[f.ra] = value;
                 ctx.setCr(0, value, 0, true);
             },
-            .or_ => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] | ctx.gpr[f.rb],
-            .add => |f| ctx.gpr[f.rt] = ctx.gpr[f.ra] +% ctx.gpr[f.rb],
-            .subf => |f| ctx.gpr[f.rt] = ctx.gpr[f.rb] -% ctx.gpr[f.ra],
-            .mullw => |f| ctx.gpr[f.rt] = @truncate(@as(u32, @truncate(ctx.gpr[f.ra])) *% @as(u32, @truncate(ctx.gpr[f.rb]))),
-            .srawi => |f| ctx.gpr[f.ra] = sraw32(ctx.gpr[f.rs], f.sh),
-            .sraw => |f| ctx.gpr[f.ra] = sraw32(ctx.gpr[f.rt], @truncate(ctx.gpr[f.rb] & 0x3f)),
-            .rlwinm => |f| ctx.gpr[f.ra] = std.math.rotl(u32, @truncate(ctx.gpr[f.rs]), f.sh) & mask32(f.mb, f.me),
+            .or_ => |f| {
+                ctx.gpr[f.ra] = ctx.gpr[f.rt] | ctx.gpr[f.rb];
+                recordCr(ctx, f.rc, false, f.ra);
+            },
+            .add => |f| {
+                ctx.gpr[f.rt] = ctx.gpr[f.ra] +% ctx.gpr[f.rb];
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .subf => |f| {
+                ctx.gpr[f.rt] = ctx.gpr[f.rb] -% ctx.gpr[f.ra];
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .mullw => |f| {
+                ctx.gpr[f.rt] = @truncate(@as(u32, @truncate(ctx.gpr[f.ra])) *% @as(u32, @truncate(ctx.gpr[f.rb])));
+                recordCr(ctx, f.rc, true, f.rt);
+            },
+            .srawi => |f| {
+                ctx.gpr[f.ra] = sraw32(ctx.gpr[f.rs], f.sh);
+                recordCr(ctx, f.rc, true, f.ra);
+            },
+            .sraw => |f| {
+                ctx.gpr[f.ra] = sraw32(ctx.gpr[f.rt], @truncate(ctx.gpr[f.rb] & 0x3f));
+                recordCr(ctx, f.rc, true, f.ra);
+            },
+            .rlwinm => |f| {
+                ctx.gpr[f.ra] = std.math.rotl(u32, @truncate(ctx.gpr[f.rs]), f.sh) & mask32(f.mb, f.me);
+                recordCr(ctx, f.rc, true, f.ra);
+            },
             .mflr => |f| ctx.gpr[f.rt] = ctx.lr,
             .mtlr => |f| ctx.lr = @truncate(ctx.gpr[f.rt]),
             .mfctr => |f| ctx.gpr[f.rt] = ctx.ctr,
@@ -150,30 +172,43 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 ctx.store64(at, ctx.gpr[f.rt]);
                 ctx.gpr[f.ra] = at;
             },
-            .cmpw => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], ctx.gpr[f.rb], true),
-            .cmplw => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], ctx.gpr[f.rb], false),
+            .cmpw => |f| ctx.setCr32(f.crf, ctx.gpr[f.ra], ctx.gpr[f.rb], true),
+            .cmplw => |f| ctx.setCr32(f.crf, ctx.gpr[f.ra], ctx.gpr[f.rb], false),
             .lwzx => |f| ctx.gpr[f.rt] = ctx.load32(xaddr(ctx, f.ra, f.rb)),
             .lbzx => |f| ctx.gpr[f.rt] = ctx.load8(xaddr(ctx, f.ra, f.rb)),
             .stwx => |f| ctx.store32(xaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
-            .mulli => |f| ctx.gpr[f.rt] = @as(u64, @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.gpr[f.ra])))) *% @as(i32, f.imm)))),
-            .extsh => |f| ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(ctx.gpr[f.rt]))))))),
-            .extsb => |f| ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i8, @bitCast(@as(u8, @truncate(ctx.gpr[f.rt]))))))),
-            .extsw => |f| ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.gpr[f.rt]))))))),
+            .mulli => |f| ctx.gpr[f.rt] = @bitCast(@as(i64, @bitCast(ctx.gpr[f.ra])) *% @as(i64, f.imm)),
+            .extsh => |f| {
+                ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(ctx.gpr[f.rt])))))));
+                recordCr(ctx, f.rc, true, f.ra);
+            },
+            .extsb => |f| {
+                ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i8, @bitCast(@as(u8, @truncate(ctx.gpr[f.rt])))))));
+                recordCr(ctx, f.rc, true, f.ra);
+            },
+            .extsw => |f| {
+                ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.gpr[f.rt])))))));
+                recordCr(ctx, f.rc, true, f.ra);
+            },
             .and_ => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] & ctx.gpr[f.rb],
-            .frsp => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra]))),
-            .fneg => |f| ctx.fpr[f.frd] = -ctx.fpr[f.fra],
-            .fcfid => |f| ctx.fpr[f.frd] = @floatFromInt(@as(i64, @bitCast(ctx.fpr[f.fra]))),
+            .frsp => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.frb]))),
+            .fneg => |f| ctx.fpr[f.frd] = -ctx.fpr[f.frb],
+            .fcfid => |f| ctx.fpr[f.frd] = @floatFromInt(@as(i64, @bitCast(ctx.fpr[f.frb]))),
             .xori => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] ^ f.imm,
             .subfic => |f| ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, f.imm))) -% ctx.gpr[f.rt],
             .rldicr => |f| ctx.gpr[f.ra] = std.math.rotl(u64, ctx.gpr[f.rs], f.sh) & rldicrMask(f.me),
             .stfiwx => |f| ctx.store32(xaddr(ctx, f.ra, f.rb), @as(u32, @truncate(@as(u64, @bitCast(ctx.fpr[f.rt]))))),
-            .cntlzw => |f| ctx.gpr[f.ra] = @clz(@as(u32, @truncate(ctx.gpr[f.rt]))),
+            .cntlzw => |f| {
+                ctx.gpr[f.ra] = @clz(@as(u32, @truncate(ctx.gpr[f.rt])));
+                recordCr(ctx, f.rc, true, f.ra);
+            },
             .stbx => |f| ctx.store8(xaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
             .lfsx => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(xaddr(ctx, f.fra, f.frb))))))),
             .lhz => |f| ctx.gpr[f.rt] = ctx.load16(addr(ctx, f.ra, f.imm)),
             .rlwimi => |f| {
                 const mask = mask32(f.mb, f.me);
                 ctx.gpr[f.ra] = (ctx.gpr[f.ra] & ~@as(u64, mask)) | (@as(u64, std.math.rotl(u32, @as(u32, @truncate(ctx.gpr[f.rs])), f.sh)) & mask);
+                recordCr(ctx, f.rc, true, f.ra);
             },
             .stw => |f| ctx.store32(addr(ctx, f.ra, f.imm), ctx.gpr[f.rt]),
             .stwu => |f| {
@@ -190,13 +225,13 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .fmul => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] * ctx.fpr[f.frb],
             .fdiv => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] / ctx.fpr[f.frb],
             .fcmpu => |f| ctx.setCrFloat(f.crf, ctx.fpr[f.fra], ctx.fpr[f.frb]),
-            .fmr => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra],
+            .fmr => |f| ctx.fpr[f.frd] = ctx.fpr[f.frb],
             .fadds => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) + @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fsubs => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) - @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fmuls => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) * @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fdivs => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) / @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fmadds => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) * @as(f32, @floatCast(ctx.fpr[f.frc])) + @as(f32, @floatCast(ctx.fpr[f.frb]))),
-            .fctiwz => |f| ctx.fpr[f.frd] = @floatFromInt(@as(i32, @intFromFloat(ctx.fpr[f.fra]))),
+            .fctiwz => |f| ctx.fpr[f.frd] = ctx.fctiwz(ctx.fpr[f.frb]),
             .lfd => |f| ctx.fpr[f.frd] = @bitCast(ctx.load64(addr(ctx, f.ra, f.imm))),
             .stfd => |f| ctx.store64(addr(ctx, f.ra, f.imm), @bitCast(ctx.fpr[f.frd])),
             .lvx => |f| ctx.vmx[f.vd] = ctx.loadVmx(vaddr(ctx, f.ra, f.rb)),
@@ -212,8 +247,8 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .vperm => |f| ctx.vmx[f.vd] = ctx.vperm(ctx.vmx[f.va], ctx.vmx[f.vb], ctx.vmx[f.vc]),
             .vmaddfp => |f| ctx.vmx[f.vd] = ctx.vmaddfp(ctx.vmx[f.va], ctx.vmx[f.vc], ctx.vmx[f.vb]),
             .vspltisw => |f| ctx.vmx[f.vd] = ctx.vspltisw(f.simm),
-            .cmpwi => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], @bitCast(@as(i64, f.imm)), true),
-            .cmplwi => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], @as(u64, f.imm), false),
+            .cmpwi => |f| ctx.setCr32(f.crf, ctx.gpr[f.ra], @bitCast(@as(i64, f.imm)), true),
+            .cmplwi => |f| ctx.setCr32(f.crf, ctx.gpr[f.ra], @as(u64, f.imm), false),
         }
         i += 1;
     }
@@ -242,7 +277,16 @@ fn sraw32(value: u64, shift: u6) u64 {
     return @as(u32, @bitCast(x >> @intCast(shift)));
 }
 
-fn rldicrMask(me: u5) u64 {
+fn recordCr(ctx: *ctx_mod.Ctx, rc: bool, is_32: bool, reg: u8) void {
+    if (!rc) return;
+    if (is_32) {
+        ctx.setCr32(0, ctx.gpr[reg], 0, true);
+    } else {
+        ctx.setCr(0, ctx.gpr[reg], 0, true);
+    }
+}
+
+fn rldicrMask(me: u6) u64 {
     if (me == 63) return 0xFFFFFFFFFFFFFFFF;
     return ~((@as(u64, 1) << @intCast(63 - @as(u6, me))) - 1);
 }
@@ -315,7 +359,55 @@ test "loads and stores go through the faulting memory helpers" {
 test "an unsupported instruction stops with a name" {
     var buf: [16]u8 = @splat(0);
     var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
-    try testing.expectError(error.Unsupported, run(&ctx, &.{0xfc22182a}));
+    try testing.expectError(error.Unsupported, run(&ctx, &.{0x00000000}));
+}
+
+test "record forms update CR0" {
+    var buf: [16]u8 = @splat(0);
+
+    var sub = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    sub.gpr[5] = 1;
+    sub.gpr[6] = 1;
+    try runWords(&sub, &.{ 0x7c662851, 0x4e800020 }); // subf. r3,r6,r5
+    try testing.expectEqual(@as(u64, 0), sub.gpr[3]);
+    try testing.expectEqual(@as(u1, 1), sub.crBit(2)); // equal
+
+    var rot = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    rot.gpr[4] = 0x80000000;
+    try runWords(&rot, &.{ 0x5483003f, 0x4e800020 }); // rlwinm. r3,r4,0,0,31
+    try testing.expectEqual(@as(u64, 0x80000000), rot.gpr[3]);
+    try testing.expectEqual(@as(u1, 1), rot.crBit(0)); // less than
+}
+
+test "bctr and bcctr are refused" {
+    var buf: [16]u8 = @splat(0);
+    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    try testing.expectError(error.Unsupported, run(&ctx, &.{0x4e800420}));
+    try testing.expectError(error.Unsupported, run(&ctx, &.{0x4d800420}));
+}
+
+test "single-source float ops read frb" {
+    var buf: [16]u8 = @splat(0);
+
+    var fmr = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    fmr.fpr[1] = 2.5;
+    try runWords(&fmr, &.{ 0xfc600890, 0x4e800020 }); // fmr f3,f1
+    try testing.expectEqual(@as(f64, 2.5), fmr.fpr[3]);
+
+    var frsp = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    frsp.fpr[1] = 3.5;
+    try runWords(&frsp, &.{ 0xfc600818, 0x4e800020 }); // frsp f3,f1
+    try testing.expectEqual(@as(f64, 3.5), frsp.fpr[3]);
+
+    var fneg = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    fneg.fpr[1] = 3.5;
+    try runWords(&fneg, &.{ 0xfc600850, 0x4e800020 }); // fneg f3,f1
+    try testing.expectEqual(@as(f64, -3.5), fneg.fpr[3]);
+
+    var fcfid = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    fcfid.fpr[1] = @bitCast(@as(u64, 5));
+    try runWords(&fcfid, &.{ 0xfc600e9c, 0x4e800020 }); // fcfid f3,f1
+    try testing.expectEqual(@as(f64, 5.0), fcfid.fpr[3]);
 }
 
 test "tail call runs the target and returns to the caller" {
@@ -347,4 +439,69 @@ test "bctrl runs the target in ctr and returns" {
     };
     try runTable(&ctx, 0x1000, &a, &table);
     try testing.expectEqual(@as(u64, 7), ctx.gpr[3]);
+}
+
+test "cmpw and cmpwi compare only the low 32 bits" {
+    var buf: [16]u8 = @splat(0);
+
+    var cmp = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    cmp.gpr[3] = 0x0000000080000000;
+    cmp.gpr[4] = 0;
+    try runWords(&cmp, &.{ 0x7c032000, 0x4e800020 }); // cmpw r3,r4
+    try testing.expectEqual(@as(u1, 1), cmp.crBit(0)); // less than
+
+    var cmp_imm = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    cmp_imm.gpr[3] = 0x0000000080000000;
+    try runWords(&cmp_imm, &.{ 0x2c030000, 0x4e800020 }); // cmpwi r3,0
+    try testing.expectEqual(@as(u1, 1), cmp_imm.crBit(0));
+}
+
+test "cmplw and cmplwi compare only the low 32 bits" {
+    var buf: [16]u8 = @splat(0);
+
+    var cmp = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    cmp.gpr[3] = 0xffffffff80000000;
+    cmp.gpr[4] = 0x0000000080000000;
+    try runWords(&cmp, &.{ 0x7c032040, 0x4e800020 }); // cmplw r3,r4
+    try testing.expectEqual(@as(u1, 1), cmp.crBit(2)); // equal
+
+    var cmp_imm = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    cmp_imm.gpr[3] = 0xffffffff00000000;
+    try runWords(&cmp_imm, &.{ 0x28030000, 0x4e800020 }); // cmplwi r3,0
+    try testing.expectEqual(@as(u1, 1), cmp_imm.crBit(2)); // equal
+}
+
+test "mulli keeps the high 32 bits of a 64-bit product" {
+    var buf: [16]u8 = @splat(0);
+    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    ctx.gpr[3] = 0x0000000100000000;
+    try runWords(&ctx, &.{ 0x1c633039, 0x4e800020 }); // mulli r3,r3,12345
+    try testing.expectEqual(@as(u64, 0x0000303900000000), ctx.gpr[3]);
+}
+
+test "mullw keeps the low 32 bits" {
+    var buf: [16]u8 = @splat(0);
+    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    ctx.gpr[3] = 0x0000000100000000;
+    ctx.gpr[4] = 2;
+    try runWords(&ctx, &.{ 0x7c6321d6, 0x4e800020 }); // mullw r3,r3,r4
+    try testing.expectEqual(@as(u64, 0), ctx.gpr[3]);
+}
+
+test "fctiwz leaves integer bits for stfiwx" {
+    var buf: [16]u8 = @splat(0);
+    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    ctx.gpr[4] = 0x1000;
+    ctx.fpr[1] = 1.5;
+    try runWords(&ctx, &.{ 0xfc60081e, 0x7c6027ae, 0x4e800020 }); // fctiwz f3,f1; stfiwx f3,0,r4
+    try testing.expectEqual(@as(u64, 1), ctx.load32(0x1000));
+}
+
+test "fctiwz writes the invalid sentinel for nan" {
+    var buf: [16]u8 = @splat(0);
+    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    ctx.gpr[4] = 0x1000;
+    ctx.fpr[1] = std.math.nan(f64);
+    try runWords(&ctx, &.{ 0xfc60081e, 0x7c6027ae, 0x4e800020 });
+    try testing.expectEqual(@as(u64, 0x80000000), ctx.load32(0x1000));
 }

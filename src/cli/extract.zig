@@ -76,6 +76,14 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !S
     };
     defer if (existing) |*m| m.deinit(allocator);
 
+    const xex_version = [4]u16{ version.major(), version.minor(), version.build(), version.qfe() };
+    // shortcut: a modified disc with the same title, version and size still reuses
+    // the manifest. Add an ISO fingerprint when that case matters.
+    const stale = if (existing) |m|
+        m.iso_size != src.size or m.title_id != h.execution.title_id or !std.mem.eql(u16, &m.xex_version, &xex_version)
+    else
+        false;
+
     if (existing == null) {
         var it = out_dir.iterate();
         if (try it.next(io) != null) return error.OutDirNotEmpty;
@@ -88,20 +96,22 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !S
         .files = @intCast(entries.len),
         .bytes = 0,
         .skipped = 0,
-        .xex_version = .{ version.major(), version.minor(), version.build(), version.qfe() },
+        .xex_version = xex_version,
         .image_verified = image_verified,
     };
 
     for (entries, 0..) |entry, i| {
-        if (existing) |m| {
-            if (m.find(entry.path)) |old| {
-                var current_hex: [manifest.digest_hex_len]u8 = undefined;
-                var current_size: u64 = 0;
-                const present = try hashExisting(io, out_dir, entry.path, &current_hex, &current_size);
-                if (present and current_size == entry.size and std.mem.eql(u8, &old.sha256, &current_hex)) {
-                    digests[i] = current_hex;
-                    summary.skipped += 1;
-                    continue;
+        if (!stale) {
+            if (existing) |m| {
+                if (m.find(entry.path)) |old| {
+                    var current_hex: [manifest.digest_hex_len]u8 = undefined;
+                    var current_size: u64 = 0;
+                    const present = try hashExisting(io, out_dir, entry.path, &current_hex, &current_size);
+                    if (present and current_size == entry.size and std.mem.eql(u8, &old.sha256, &current_hex)) {
+                        digests[i] = current_hex;
+                        summary.skipped += 1;
+                        continue;
+                    }
                 }
             }
         }
@@ -278,6 +288,43 @@ test "second extract skips every file" {
     try testing.expectEqual(@as(u32, 0), first.skipped);
     try testing.expectEqual(@as(u32, 3), second.skipped);
     try testing.expectEqual(@as(u64, 0), second.bytes);
+}
+
+test "a different title rewrites the whole tree" {
+    const io = testIo();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const xex_a = try xex_writer.buildFull(testing.allocator, 0, 1);
+    defer testing.allocator.free(xex_a);
+    const xex_b = try testing.allocator.dupe(u8, xex_a);
+    defer testing.allocator.free(xex_b);
+    std.mem.writeInt(u32, xex_b[xex_writer.off.execution + 0x0C ..][0..4], 0x11111111, .big);
+
+    var img_a = try iso_writer.buildWithXex(testing.allocator, 0, xex_a);
+    defer img_a.deinit(testing.allocator);
+    var img_b = try iso_writer.buildWithXex(testing.allocator, 0, xex_b);
+    defer img_b.deinit(testing.allocator);
+    img_b.bytes[44 * iso_writer.SECTOR] ^= 0xFF;
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "a.iso", .data = img_a.bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "b.iso", .data = img_b.bytes });
+    var a_buf: [256]u8 = undefined;
+    var b_buf: [256]u8 = undefined;
+    const a_path = try tmpPath(&tmp, &a_buf, "a.iso");
+    const b_path = try tmpPath(&tmp, &b_buf, "b.iso");
+    var out_buf: [256]u8 = undefined;
+    const out_path = try tmpPath(&tmp, &out_buf, "out");
+
+    _ = try run(testing.allocator, io, .{ .iso = a_path, .out = out_path, .key = null }, null);
+    const second = try run(testing.allocator, io, .{ .iso = b_path, .out = out_path, .key = null }, null);
+    try testing.expectEqual(@as(u32, 0), second.skipped);
+
+    var out_dir = try Io.Dir.cwd().openDir(io, out_path, .{});
+    defer out_dir.close(io);
+    const got = try out_dir.readFileAlloc(io, "common.rpf", testing.allocator, .limited(1 << 20));
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, img_b.bytes[44 * iso_writer.SECTOR ..][0..4096], got);
 }
 
 test "a corrupted file is rewritten" {
