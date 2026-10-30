@@ -72,6 +72,25 @@ pub const Ctx = struct {
         self.store(u64, addr, value, .store);
     }
 
+    /// Sets one 4-bit CR field from an integer compare (LT, GT, EQ, SO=0).
+    pub fn setCr(self: *Ctx, crf: u3, a: u64, b: u64, signed: bool) void {
+        var field: u32 = 0;
+        if (signed) {
+            const x: i64 = @bitCast(a);
+            const y: i64 = @bitCast(b);
+            if (x < y) field |= 0b1000;
+            if (x > y) field |= 0b0100;
+            if (x == y) field |= 0b0010;
+        } else {
+            if (a < b) field |= 0b1000;
+            if (a > b) field |= 0b0100;
+            if (a == b) field |= 0b0010;
+        }
+        const shift: u5 = @intCast((7 - @as(u32, crf)) * 4);
+        const mask: u32 = @as(u32, 0xf) << shift;
+        self.cr = (self.cr & ~mask) | (field << shift);
+    }
+
     pub fn fetchInsn(self: *Ctx, addr: u32) u32 {
         return @intCast(self.load(u32, addr, .fetch));
     }
@@ -152,6 +171,17 @@ test "out of range store changes nothing" {
     for (buf) |b| try testing.expectEqual(@as(u8, 0xAA), b);
     try testing.expectEqual(FaultKind.store, ctx.fault.kind);
     try testing.expectEqual(@as(u8, 1), ctx.fault.size);
+}
+
+test "setCr writes the requested field only" {
+    var buf: [16]u8 = @splat(0);
+    var ctx = testCtx(&buf);
+
+    ctx.setCr(0, 0x1000, 0x1000, false);
+    try testing.expectEqual(@as(u32, 0x2000_0000), ctx.cr);
+
+    ctx.setCr(7, 1, 2, true);
+    try testing.expectEqual(@as(u32, 0x2000_0008), ctx.cr);
 }
 
 test "fetch faults are recorded as fetch" {
