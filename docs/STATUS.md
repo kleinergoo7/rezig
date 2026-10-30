@@ -97,7 +97,8 @@ Done and verified on the real disc:
   instances decode and emit, 2,915 functions are fully emittable. Integer, single-precision
   float, branches, calls, tail calls and the five decoded VMX ops (`vor`, `vxor`, `vaddfp`,
   `lvx`, `stvx`) are lowered. The remaining limit is decoding: 581,975 instruction instances,
-  mostly primary opcodes 31, 62, 04, 58 and 40. Reproduce with
+  mostly primary opcodes 31, 62, 04, 58 and 40. `coverage` now prints the top
+  undecoded forms by primary opcode and extension field, with a sample word. Reproduce with
   `zig build coverage -Dxex=<xex>`.
 - gate: 50 functions x 64 seeded cases = 3200 differential cases, emitted Zig vs the interpreter,
   PASS. Compares GPR/CR/XER/LR/CTR, fault kind/addr/size and every page byte. The slice includes

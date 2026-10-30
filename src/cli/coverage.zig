@@ -21,11 +21,12 @@ pub const Summary = struct {
     decode_failures: u64,
     fully_emittable: usize,
     missing: []Missing,
-    /// Counts per 6-bit primary opcode for words the decoder rejects.
-    undecoded: [64]u64,
+    undecoded: []Form,
 };
 
-const Undecoded = struct { primary: u6, count: u64 };
+/// Decoder gap grouped by primary opcode and its extension field, with one
+/// sample word so the encoding can be assembled directly.
+pub const Form = struct { primary: u6, xo: u16, count: u64, sample: u32 };
 
 /// Counts decoder and emitter coverage over already-discovered functions.
 /// The caller owns `summary.missing`.
@@ -38,11 +39,13 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
         .decode_failures = 0,
         .fully_emittable = 0,
         .missing = &.{},
-        .undecoded = @splat(0),
+        .undecoded = &.{},
     };
 
     var counts: std.StringHashMapUnmanaged(u64) = .empty;
     defer counts.deinit(allocator);
+    var forms: std.AutoHashMapUnmanaged(u32, Form) = .empty;
+    defer forms.deinit(allocator);
 
     for (functions) |function| {
         var complete = true;
@@ -52,7 +55,17 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
             summary.instructions += 1;
             const op = decode.decode(word) catch {
                 summary.decode_failures += 1;
-                summary.undecoded[word >> 26] += 1;
+                const key = formKey(word);
+                const entry = try forms.getOrPut(allocator, key);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = .{
+                        .primary = @truncate(word >> 26),
+                        .xo = @truncate(key & 0xffff),
+                        .count = 0,
+                        .sample = word,
+                    };
+                }
+                entry.value_ptr.count += 1;
                 complete = false;
                 continue;
             };
@@ -79,14 +92,36 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
     const items = try list.toOwnedSlice(allocator);
     std.mem.sort(Missing, items, {}, missingGreaterThan);
     summary.missing = items;
+
+    var form_list: std.ArrayList(Form) = .empty;
+    errdefer form_list.deinit(allocator);
+    var form_it = forms.iterator();
+    while (form_it.next()) |entry| try form_list.append(allocator, entry.value_ptr.*);
+    const form_items = try form_list.toOwnedSlice(allocator);
+    std.mem.sort(Form, form_items, {}, formGreaterThan);
+    summary.undecoded = form_items;
     return summary;
 }
 
-fn missingGreaterThan(_: void, a: Missing, b: Missing) bool {
+/// Groups a rejected word by primary opcode and, where the ISA has one, its
+/// extension field. Unknown primaries group under `xo = 0`.
+fn formKey(word: u32) u32 {
+    const primary: u6 = @truncate(word >> 26);
+    const xo: u16 = switch (primary) {
+        31, 19 => @truncate((word >> 1) & 0x3ff),
+        4 => @truncate(word & 0x3f),
+        62, 58, 63 => @truncate(word & 0x3),
+        40, 44, 48, 50, 52, 59 => @truncate((word >> 1) & 0x1f),
+        else => 0,
+    };
+    return (@as(u32, primary) << 16) | xo;
+}
+
+fn formGreaterThan(_: void, a: Form, b: Form) bool {
     return a.count > b.count;
 }
 
-fn undecodedGreaterThan(_: void, a: Undecoded, b: Undecoded) bool {
+fn missingGreaterThan(_: void, a: Missing, b: Missing) bool {
     return a.count > b.count;
 }
 
@@ -145,6 +180,7 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
 
     const summary = try collect(allocator, functions);
     defer allocator.free(summary.missing);
+    defer allocator.free(summary.undecoded);
 
     var buf: [4096]u8 = undefined;
     var writer = Io.File.stdout().writer(io, &buf);
@@ -187,18 +223,10 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         }
     }
 
-    var undecoded: [64]Undecoded = undefined;
-    var undecoded_len: usize = 0;
-    for (summary.undecoded, 0..) |hits, primary| {
-        if (hits == 0) continue;
-        undecoded[undecoded_len] = .{ .primary = @intCast(primary), .count = hits };
-        undecoded_len += 1;
-    }
-    std.mem.sort(Undecoded, undecoded[0..undecoded_len], {}, undecodedGreaterThan);
-    if (undecoded_len != 0) {
-        try out.writeAll("undecoded primary opcodes:\n");
-        for (undecoded[0..@min(undecoded_len, 20)]) |entry| {
-            try out.print("  {d:0>2} {d}\n", .{ entry.primary, entry.count });
+    if (summary.undecoded.len != 0) {
+        try out.writeAll("undecoded forms (primary, xo, count, sample):\n");
+        for (summary.undecoded[0..@min(summary.undecoded.len, 25)]) |form| {
+            try out.print("  {d:0>2} 0x{X:0>3} {d} 0x{X:0>8}\n", .{ form.primary, form.xo, form.count, form.sample });
         }
     }
     try out.flush();
@@ -236,13 +264,15 @@ test "collect separates emitted instructions from decoder gaps" {
 
     const summary = try collect(testing.allocator, &functions);
     defer testing.allocator.free(summary.missing);
+    defer testing.allocator.free(summary.undecoded);
 
     try testing.expectEqual(@as(usize, 2), summary.functions);
     try testing.expectEqual(@as(u64, 6), summary.instructions);
     try testing.expectEqual(@as(u64, 5), summary.decoded);
     try testing.expectEqual(@as(u64, 4), summary.emitted);
     try testing.expectEqual(@as(u64, 1), summary.decode_failures);
-    try testing.expectEqual(@as(u64, 1), summary.undecoded[0]);
+    try testing.expectEqual(@as(usize, 1), summary.undecoded.len);
+    try testing.expectEqual(@as(u64, 1), summary.undecoded[0].count);
     try testing.expectEqual(@as(usize, 1), summary.fully_emittable);
     try testing.expectEqual(@as(usize, 1), summary.missing.len);
     try testing.expectEqualStrings("bc", summary.missing[0].name);
