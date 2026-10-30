@@ -40,9 +40,9 @@ Verified on a real GTA IV USA disc 1.0:
 | Disc extraction | 170 files, 6,956,031,956 bytes; a rerun skips all 170 |
 | XEX parse | version `0.0.0.5`, entry `0x829A0860`, 13 PE sections |
 | XEX rewrite | byte-identical to the reference tool's output (11,841,536 bytes) |
-| Function discovery | 24,513 `.pdata` starts, 28,038 discovered functions |
-| Instruction coverage | 1,800,711 unique instructions = 76.73% of `.text` |
-| Decode / emit | 83.77% / 83.56% of discovered instruction instances |
+| Function discovery | 24,513 `.pdata` starts, 29,555 discovered functions |
+| Instruction coverage | 2,086,758 unique instructions = 88.92% of `.text` |
+| Decode / emit | 94.86% / 94.86% of discovered instruction instances |
 | Emitter | integer, single-precision float, VMX subset, branches, loops, direct and indirect calls, tail calls |
 | Differential gate | 50 functions x 64 cases = 3,200 comparisons, all pass |
 | Portability | compiles for x86_64-windows and aarch64-linux |
@@ -58,8 +58,7 @@ compares GPRs, FPRs, CR, XER, LR, CTR, fault kind/address/size, and every byte o
 - **VMX/AltiVec breadth.** Only `vor`, `vxor`, `vaddfp`, `lvx` and `stvx` are decoded and
   emitted; the rest of the vector ISA is missing.
 - **Decoder gaps.** 581,975 instruction instances, mostly primary opcodes 31, 62, 04, 58, 40.
-- **Whole-image emission.** `codegen --all` emits all 15,629 supported functions in 16 chunks;
-  they compile and link (316 MB Debug object).
+- **Kernel behaviour.** Imports are logged stubs; boot reaches seven imports and then fails.
 - **Indirect branches.** `bctr` and non-return `bclr` are not lowered.
 
 `docs/STATUS.md` records the detailed numbers, known bugs and limits.

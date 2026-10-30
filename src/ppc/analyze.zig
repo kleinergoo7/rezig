@@ -55,9 +55,20 @@ pub fn functionsFrom(
     try enqueue(allocator, &queue, &seen, entry);
     for (seeds) |seed| try enqueue(allocator, &queue, &seen, seed);
 
+    // `.pdata` gives function starts. The next start bounds the previous body,
+    // so a function ending in a tail call is not scanned into the next one.
+    var bounds: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+    defer bounds.deinit(allocator);
+    for (seeds, 0..) |seed, i| {
+        if (i + 1 < seeds.len and seeds[i + 1] > seed) {
+            try bounds.put(allocator, seed, seeds[i + 1]);
+        }
+    }
+
     while (queue.pop()) |addr| {
         // Discovery is structural: scan to blr without requiring every word to decode.
-        const words = scanAt(allocator, sections, addr) catch |e| switch (e) {
+        const bound = bounds.get(addr) orelse 0;
+        const words = scanAtBounded(allocator, sections, addr, bound) catch |e| switch (e) {
             error.OutOfRange, error.NoTerminator => continue,
             else => |other| return other,
         };
@@ -100,6 +111,10 @@ pub fn freeFunctions(allocator: std.mem.Allocator, list: []Function) void {
 /// Scans from `addr` to the first `blr` without decoding. Used for discovery, so one unknown
 /// instruction does not make a whole function invisible.
 fn scanAt(allocator: std.mem.Allocator, sections: []const CodeSection, addr: u32) Error![]u32 {
+    return scanAtBounded(allocator, sections, addr, 0);
+}
+
+fn scanAtBounded(allocator: std.mem.Allocator, sections: []const CodeSection, addr: u32, bound: u32) Error![]u32 {
     const section = findSection(sections, addr) orelse return error.OutOfRange;
     const start = (addr - section.addr) / 4;
 
@@ -111,6 +126,9 @@ fn scanAt(allocator: std.mem.Allocator, sections: []const CodeSection, addr: u32
         if (words.items.len >= max_function_insns) return error.NoTerminator;
         const at = index * 4;
         const word = std.mem.readInt(u32, section.bytes[at..][0..4], .big);
+        if (bound != 0 and section.addr + @as(u32, @intCast(at)) >= bound) {
+            return words.toOwnedSlice(allocator);
+        }
         try words.append(allocator, word);
         if (word == 0x4e800020) return words.toOwnedSlice(allocator);
     }

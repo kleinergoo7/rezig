@@ -10,7 +10,16 @@ const abi = @import("abi.zig");
 
 pub const Error = error{UnsupportedOpcode} || std.mem.Allocator.Error;
 
-pub const Options = struct { addr: u32 };
+pub const Options = struct {
+    addr: u32,
+    /// Chunked projects call the central dispatch through `dispatch.zig`;
+    /// a single-file slice defines `dispatch` in the same file.
+    external_dispatch: bool = false,
+
+    fn call(self: Options) []const u8 {
+        return if (self.external_dispatch) "@import(\"dispatch.zig\").dispatch" else "dispatch";
+    }
+};
 
 const insn = ppc.decode.Instruction;
 
@@ -173,7 +182,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 try out.appendSlice(allocator, "    return;\n");
                 break;
             }
-            try lower(allocator, &out, op, addr);
+            try lower(allocator, &out, op, addr, opts.call());
         }
         try out.appendSlice(allocator, "}\n");
         return out.toOwnedSlice(allocator);
@@ -198,7 +207,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 if (inRange(target, base, end)) {
                     try out.print(allocator, "                pc = 0x{X};\n", .{target});
                 } else {
-                    try tailCall(allocator, &out, target);
+                    try tailCall(allocator, &out, target, opts.call());
                 }
             },
             .bc => |f| {
@@ -209,7 +218,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                     });
                 } else {
                     try out.print(allocator, "                if (ctx.branch({d}, {d})) {{\n", .{ f.bo, f.bi });
-                    try tailCall(allocator, &out, target);
+                    try tailCall(allocator, &out, target, opts.call());
                     try out.print(allocator, "                }}\n                pc = 0x{X};\n", .{next});
                 }
             },
@@ -217,7 +226,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 if (f.link) {
                     // bctrl: branch to CTR and link.
                     try out.print(allocator, "                ctx.lr = 0x{X};\n", .{next});
-                    try out.appendSlice(allocator, "                if (!dispatch(ctx.ctr, ctx)) {\n                    ctx.fault = .{ .kind = .unsupported, .addr = ctx.ctr };\n                    return;\n                }\n");
+                    try out.print(allocator, "                if (!{s}(ctx.ctr, ctx)) {{\n                    ctx.fault = .{{ .kind = .unsupported, .addr = ctx.ctr }};\n                    return;\n                }}\n", .{opts.call()});
                     try out.print(allocator, "                pc = 0x{X};\n", .{next});
                 } else {
                     try out.print(allocator, "                if (ctx.branch({d}, {d})) return;\n                pc = 0x{X};\n", .{
@@ -226,7 +235,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 }
             },
             else => {
-                try lower(allocator, &out, op, addr);
+                try lower(allocator, &out, op, addr, opts.call());
                 try out.print(allocator, "                pc = 0x{X};\n", .{next});
             },
         }
@@ -237,14 +246,14 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
     return out.toOwnedSlice(allocator);
 }
 
-fn tailCall(allocator: std.mem.Allocator, out: *std.ArrayList(u8), target: u32) !void {
-    try out.print(allocator, "                if (!dispatch(0x{X}, ctx)) {{\n                    ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n                }}\n                return;\n", .{ target, target });
+fn tailCall(allocator: std.mem.Allocator, out: *std.ArrayList(u8), target: u32, call: []const u8) !void {
+    try out.print(allocator, "                if (!{s}(0x{X}, ctx)) {{\n                    ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n                }}\n                return;\n", .{ call, target, target });
 }
 
-fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: u32) Error!void {
+fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: u32, call: []const u8) Error!void {
     switch (op) {
-        .bl => |f| try out.print(allocator, "    ctx.lr = 0x{X};\n    if (!dispatch(0x{X}, ctx)) {{\n        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n        return;\n    }}\n", .{
-            addr +% 4, addr +% f.target, addr +% f.target,
+        .bl => |f| try out.print(allocator, "    ctx.lr = 0x{X};\n    if (!{s}(0x{X}, ctx)) {{\n        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n        return;\n    }}\n", .{
+            addr +% 4, call, addr +% f.target, addr +% f.target,
         }),
         .nop => {},
         .addi => try immAdd(allocator, out, op.addi.rt, op.addi.ra, sext(op.addi.imm)),

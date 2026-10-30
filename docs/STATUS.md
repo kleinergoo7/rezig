@@ -61,12 +61,28 @@ Two facts this exposed:
 - A single 82.3 MB file does not compile: the compiler misreports type errors past roughly
   2,000 functions, so `codegen --all` emits 16 chunks of ~1,000 functions plus a central
   `dispatch.zig`.
-- All 15,629 supported functions compile and link: 6.7 s wall, 1.1 GB peak RSS, 316 MB Debug
-  object, 15,629 guest symbols present.
+- All 17,448 supported functions compile and link in 18 chunks.
 - The chunked build caught six emitter bugs the 50-function gate could not: two missing
   parentheses, `mulli`/`extsh`/`extsb`/`extsw` sign conversions, an `&`-vs-`+%` precedence fault
   in every address computation, and a 64-bit carry in `stwu` updates.
 - Call-closed selection tops out near 1,200 functions because call targets must be emittable too.
+
+## Boot trace
+
+`zig build boot -Dxex=<xex> -Dkey=<key>` builds the whole image and runs the XEX entry point
+against stub imports. It reaches seven kernel imports and then calls an invalid indirect target:
+
+```
+import xboxkrnl.exe[28]
+import xboxkrnl.exe[207]
+import xboxkrnl.exe[179]
+import xam.xex[11]
+...
+boot: fault unsupported at 0x8218BEA8
+```
+
+The stubs return success without setting `r3`, so guest code that consumes a return value
+dereferences garbage. The next step is real kernel behaviour, not more codegen.
 
 ## Conversion
 
@@ -98,9 +114,9 @@ Done and verified on the real disc:
 - ppc decode: 44 cases, encodings assembled with Zig and confirmed with `llvm-objdump`.
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
 - codegen: 50 functions from `tests/slice/addresses.json`, `zig fmt` clean.
-- coverage, now seeded from `.pdata`: 24,513 function starts, 28,038 discovered functions,
-  1,800,711 unique instructions = 76.73% of `.text` (2,346,754 words). 95.52% of instruction
-  instances decode and emit, 15,629 functions are fully emittable (55.74%). Integer, single-precision
+- coverage, now seeded from `.pdata`: 24,513 starts bound to the next start, 29,555 discovered
+  functions, 2,086,758 unique instructions = 88.92% of `.text` (2,346,754 words). 94.86% of
+  instruction instances decode and emit, 17,448 functions are fully emittable (59.03%). Integer, single-precision
   float, branches, calls, tail calls and the five decoded VMX ops (`vor`, `vxor`, `vaddfp`,
   `lvx`, `stvx`) are lowered. The remaining limit is decoding: 581,975 instruction instances,
   mostly primary opcodes 31, 62, 04, 58 and 40. `coverage` now prints the top

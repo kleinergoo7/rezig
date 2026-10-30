@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
     addCoverageStep(b, exe, opts);
     addXexStep(b, exe, opts);
     addGateStep(b, exe, opts, target, optimize);
+    addBootStep(b, exe, opts, target, optimize);
     addPortabilityStep(b, xextool);
 }
 
@@ -184,6 +185,49 @@ fn addGateStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, targe
     const run_gate = b.addRunArtifact(gate_test);
     run_gate.step.dependOn(&codegen_run.step);
     step.dependOn(&run_gate.step);
+}
+
+fn addBootStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) void {
+    const step = b.step("boot", "Build the whole-image recompiled binary and run its entry point");
+    const xex = opts.xex orelse return failStep(b, step, "-Dxex=<path>");
+
+    const codegen_run = b.addRunArtifact(exe);
+    codegen_run.addArgs(&.{ "codegen", "--all", "--xex", xex });
+    if (opts.key) |key| codegen_run.addArgs(&.{ "--key", key });
+    codegen_run.addArgs(&.{"--out"});
+    const out_dir = codegen_run.addOutputDirectoryArg("boot");
+    const dispatch_path = out_dir.path(b, "dispatch.zig");
+
+    const runtime_module = b.createModule(.{
+        .root_source_file = b.path("src/runtime/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const image_module = b.createModule(.{
+        .root_source_file = b.path("src/boot_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const slice_module = b.createModule(.{
+        .root_source_file = dispatch_path,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "rezig_runtime", .module = runtime_module }},
+    });
+    const boot_module = b.createModule(.{
+        .root_source_file = b.path("src/boot/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "slice", .module = slice_module },
+            .{ .name = "rezig_runtime", .module = runtime_module },
+            .{ .name = "rezig_image", .module = image_module },
+        },
+    });
+    const boot_exe = b.addExecutable(.{ .name = "rezig-boot", .root_module = boot_module });
+    const run = b.addRunArtifact(boot_exe);
+    run.addArg(xex);
+    step.dependOn(&run.step);
 }
 
 /// Tier A/B compile gate. Vulkan behaviour is a manual gate, not a CI gate.

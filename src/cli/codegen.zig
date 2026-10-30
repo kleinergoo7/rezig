@@ -7,6 +7,7 @@ const image = @import("../xex/image.zig");
 const analyze = @import("../ppc/analyze.zig");
 const slice = @import("../codegen/slice.zig");
 const pdata_mod = @import("../ppc/pdata.zig");
+const xextool = @import("xextool");
 const emit = @import("../codegen/emit.zig");
 const abi = @import("../codegen/abi.zig");
 
@@ -75,7 +76,7 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
             if (!emit.supportsAll(f.addr, f.words)) continue;
             const words = try allocator.dupe(u32, f.words);
             errdefer allocator.free(words);
-            _ = emit.function(allocator, words, .{ .addr = f.addr }) catch |e| {
+            _ = emit.function(allocator, words, .{ .addr = f.addr, .external_dispatch = true }) catch |e| {
                 std.debug.print("codegen fail addr 0x{X}: {s}\n", .{ f.addr, @errorName(e) });
                 allocator.free(words);
                 continue;
@@ -108,11 +109,11 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
             try out.appendSlice(allocator, header);
             for (chunk, 0..) |candidate, j| {
                 if (j != 0) try out.append(allocator, '\n');
-                const text = try emit.function(allocator, candidate.words, .{ .addr = candidate.addr });
+                const text = try emit.function(allocator, candidate.words, .{ .addr = candidate.addr, .external_dispatch = true });
                 defer allocator.free(text);
                 try out.appendSlice(allocator, text);
             }
-            try out.appendSlice(allocator, "\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
+            try out.appendSlice(allocator, "\npub fn chunk_dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
             for (chunk) |candidate| {
                 var name_buf: [10]u8 = undefined;
                 try out.print(allocator, "        0x{X} => {{\n            {s}(ctx);\n            return true;\n        }},\n", .{
@@ -147,9 +148,9 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         }
         try central.appendSlice(allocator, "\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n");
         for (chunks.items, 0..) |_, ci| {
-            try central.print(allocator, "    if (chunk_{d:0>3}.dispatch(addr, ctx)) return true;\n", .{ci});
+            try central.print(allocator, "    if (chunk_{d:0>3}.chunk_dispatch(addr, ctx)) return true;\n", .{ci});
         }
-        try central.appendSlice(allocator, "    return false;\n}\n");
+        try central.appendSlice(allocator, "    return @import(\"kernel.zig\").dispatch(addr, ctx);\n}\n");
 
         var dir = try Io.Dir.cwd().createDirPathOpen(io, opts.out, .{});
         defer dir.close(io);
@@ -157,6 +158,33 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         defer atomic.deinit(io);
         try atomic.file.writeStreamingAll(io, central.items);
         try atomic.replace(io);
+
+        // Import thunks become host stubs that log on first call.
+        var kernel = std.ArrayList(u8).empty;
+        defer kernel.deinit(allocator);
+        try kernel.appendSlice(allocator, "const std = @import(\"std\");\nconst Ctx = @import(\"rezig_runtime\").ctx.Ctx;\n\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    _ = ctx;\n    return switch (addr) {\n");
+        if (key) |k| {
+            const raw = Io.Dir.cwd().readFileAlloc(io, xex_path, allocator, .limited(1 << 40)) catch null;
+            if (raw) |bytes| {
+                defer allocator.free(bytes);
+                var xex = xextool.xex.model.Xex.init(allocator);
+                defer xex.deinit();
+                const keys = xextool.xex.keys.Keys.uniform(k);
+                if (xextool.xex.reader.readBytes(&xex, bytes, keys)) |_| {} else |_| {}
+                for (xex.import_libraries.items) |lib| {
+                    const name = std.mem.sliceTo(&lib.name, 0);
+                    for (lib.addresses, 0..) |thunk, oi| {
+                        if (thunk == 0) continue;
+                        try kernel.print(allocator, "        0x{X} => {{ std.debug.print(\"import {s}[{d}]\\n\", .{{}}); return true; }},\n", .{ thunk, name, oi });
+                    }
+                }
+            }
+        }
+        try kernel.appendSlice(allocator, "        else => false,\n    };\n}\n");
+        var kernel_atomic = try dir.createFileAtomic(io, "kernel.zig", .{ .replace = true });
+        defer kernel_atomic.deinit(io);
+        try kernel_atomic.file.writeStreamingAll(io, kernel.items);
+        try kernel_atomic.replace(io);
 
         var addr_list = try allocator.alloc(u32, picked.len);
         defer allocator.free(addr_list);
