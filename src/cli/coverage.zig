@@ -109,8 +109,9 @@ fn formKey(word: u32) u32 {
     const primary: u6 = @truncate(word >> 26);
     const xo: u16 = switch (primary) {
         31, 19 => @truncate((word >> 1) & 0x3ff),
-        4 => @truncate(word & 0x3f),
-        62, 58, 63 => @truncate(word & 0x3),
+        4 => @truncate(word & 0x7ff),
+        62, 58 => @truncate(word & 0x3),
+        63 => @truncate((word >> 1) & 0x3ff),
         40, 44, 48, 50, 52, 59 => @truncate((word >> 1) & 0x1f),
         else => 0,
     };

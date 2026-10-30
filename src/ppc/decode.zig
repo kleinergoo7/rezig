@@ -116,6 +116,7 @@ pub fn decode(word: u32) Error!Instruction {
         50 => .{ .lfd = fdForm(word) },
         52 => .{ .stfs = fdForm(word) },
         54 => .{ .stfd = fdForm(word) },
+        59 => try decodeAForm(word, 59),
         58 => switch (word & 0x3) {
             0 => .{ .ld = dsForm(word) },
             1 => .{ .ldu = dsForm(word) },
@@ -220,7 +221,7 @@ fn decodeAForm(word: u32, primary: u8) Error!Instruction {
         18 => .{ .fdiv = fForm(word) },
         0 => .{ .fcmpu = .{ .crf = crf(word), .fra = fra(word), .frb = frb(word) } },
         72 => .{ .fmr = fForm(word) },
-        14 => .{ .fctiwz = fForm(word) },
+        15 => .{ .fctiwz = fForm(word) },
         else => error.Unsupported,
     };
 }
