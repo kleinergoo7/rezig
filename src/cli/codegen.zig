@@ -49,10 +49,11 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         count += 1;
     }
 
-    const wanted = if (opts.slice_list) |path|
-        @as(u32, @intCast((try slice.readAddressList(allocator, io, path)).len))
-    else
-        opts.slice.?;
+    const starts = try pdataStarts(allocator, img);
+    defer if (starts.len != 0) allocator.free(starts);
+
+    const found = try analyze.functionsFrom(allocator, sections[0..count], img.entry_point, starts);
+    defer analyze.freeFunctions(allocator, found);
 
     var picked: []slice.Candidate = undefined;
     if (opts.slice_list) |path| {
@@ -63,9 +64,27 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
             var err_addr: u32 = 0;
             picked[i] = .{ .addr = addr, .words = try analyze.functionAt(allocator, sections[0..count], addr, &err_addr) };
         }
+    } else if (opts.all == true) {
+        var list: std.ArrayList(slice.Candidate) = .empty;
+        errdefer {
+            for (list.items) |c| allocator.free(c.words);
+            list.deinit(allocator);
+        }
+        for (found) |f| {
+            if (f.words.len == 0 or f.words.len > analyze.max_function_insns) continue;
+            if (!emit.supportsAll(f.addr, f.words)) continue;
+            const words = try allocator.dupe(u32, f.words);
+            errdefer allocator.free(words);
+            _ = emit.function(allocator, words, .{ .addr = f.addr }) catch |e| {
+                std.debug.print("codegen fail addr 0x{X}: {s}\n", .{ f.addr, @errorName(e) });
+                allocator.free(words);
+                continue;
+            };
+            try list.append(allocator, .{ .addr = f.addr, .words = words });
+        }
+        picked = try list.toOwnedSlice(allocator);
     } else {
-        const starts = try pdataStarts(allocator, img);
-        defer if (starts.len != 0) allocator.free(starts);
+        const wanted = opts.slice orelse return error.MissingOption;
         picked = try slice.select(allocator, sections[0..count], img.entry_point, wanted, starts);
     }
     defer allocator.free(picked);
@@ -75,7 +94,10 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     try out.appendSlice(allocator, header);
     for (picked, 0..) |candidate, i| {
         if (i != 0) try out.append(allocator, '\n');
-        const text = try emit.function(allocator, candidate.words, .{ .addr = candidate.addr });
+        const text = emit.function(allocator, candidate.words, .{ .addr = candidate.addr }) catch |e| {
+            std.debug.print("codegen fail addr 0x{X}: {s}\n", .{ candidate.addr, @errorName(e) });
+            return e;
+        };
         defer allocator.free(text);
         try out.appendSlice(allocator, text);
     }

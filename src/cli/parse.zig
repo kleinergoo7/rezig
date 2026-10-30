@@ -9,6 +9,7 @@ pub const Codegen = struct {
     tree: ?[]const u8,
     xex: ?[]const u8,
     key: ?[]const u8,
+    all: ?bool,
     out: []const u8,
     slice: ?u32,
     slice_list: ?[]const u8,
@@ -22,6 +23,7 @@ pub const Command = union(enum) {
     coverage: Analyze,
     xex_convert: Xex,
     codegen: Codegen,
+    imports: Analyze,
     build: Build,
     run: Run,
     help,
@@ -32,6 +34,7 @@ pub const ParseError = error{ Usage, UnknownCommand, MissingOption, UnknownOptio
 const Options = struct {
     iso: ?[]const u8 = null,
     in: ?[]const u8 = null,
+    all: ?bool = null,
     out: ?[]const u8 = null,
     key: ?[]const u8 = null,
     tree: ?[]const u8 = null,
@@ -69,6 +72,13 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
     while (i < args.len) {
         const flag: []const u8 = args[i];
         if (!std.mem.startsWith(u8, flag, "--")) return error.UnknownOption;
+
+        if (std.mem.eql(u8, flag, "--all")) {
+            if (opts.all != null) return error.BadValue;
+            opts.all = true;
+            i += 1;
+            continue;
+        }
         if (i + 1 >= args.len) return error.MissingOption;
         const value: []const u8 = args[i + 1];
         i += 2;
@@ -98,18 +108,18 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
     if (std.mem.eql(u8, name, "extract")) {
         const iso = try opts.require("iso");
         const out = try opts.require("out");
-        try opts.rejectUnused(&.{ "in", "tree", "xex", "slice", "slice_list" });
+        try opts.rejectUnused(&.{ "in", "tree", "xex", "slice", "slice_list", "all" });
         return .{ .extract = .{ .iso = iso, .out = out, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "analyze")) {
-        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list" });
+        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list", "all" });
         const has_tree = opts.tree != null;
         const has_xex = opts.xex != null;
         if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
         return .{ .analyze = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "coverage")) {
-        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list" });
+        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list", "all" });
         const has_tree = opts.tree != null;
         const has_xex = opts.xex != null;
         if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
@@ -128,19 +138,27 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
         const has_xex = opts.xex != null;
         if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
         if (opts.slice != null and opts.slice_list != null) return error.BadValue;
-        if (opts.slice == null and opts.slice_list == null) return error.MissingOption;
+        if (opts.slice == null and opts.slice_list == null and (opts.all == null)) return error.MissingOption;
         return .{ .codegen = .{
             .tree = opts.tree,
             .xex = opts.xex,
             .key = opts.key,
+            .all = opts.all,
             .out = out,
             .slice = opts.slice,
             .slice_list = opts.slice_list,
         } };
     }
+    if (std.mem.eql(u8, name, "imports")) {
+        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list", "all" });
+        const has_tree = opts.tree != null;
+        const has_xex = opts.xex != null;
+        if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
+        return .{ .imports = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
+    }
     if (std.mem.eql(u8, name, "build") or std.mem.eql(u8, name, "run")) {
         const tree = try opts.require("tree");
-        try opts.rejectUnused(&.{ "iso", "in", "out", "key", "xex", "slice", "slice_list" });
+        try opts.rejectUnused(&.{ "iso", "in", "out", "key", "xex", "slice", "slice_list", "all" });
         if (std.mem.eql(u8, name, "build")) return .{ .build = .{ .tree = tree } };
         return .{ .run = .{ .tree = tree } };
     }

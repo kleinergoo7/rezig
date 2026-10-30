@@ -7,6 +7,7 @@ const analyze = @import("analyze.zig");
 const codegen = @import("codegen.zig");
 const xex_convert = @import("xex.zig");
 const coverage = @import("coverage.zig");
+const imports = @import("imports.zig");
 const extract = @import("extract.zig");
 const keys = @import("key.zig");
 const manifest = @import("manifest.zig");
@@ -18,6 +19,7 @@ pub const usage =
     \\  extract   Copy the disc tree from an ISO and verify it
     \\  analyze   Parse the XEX and report version, entry point and sections
     \\  coverage  Report decoder and emitter coverage over discovered code
+    \\  imports   List the XEX import libraries and thunk addresses
     \\  xex       Rewrite an XEX as an unencrypted, uncompressed copy
     \\  codegen   Emit Zig source for selected guest functions
     \\  build     Build the generated project
@@ -104,6 +106,22 @@ pub fn run(
             };
             coverage.run(gpa, io, opts, key) catch |e| {
                 try err.print("rezig coverage: {s}\n", .{@errorName(e)});
+                try err.flush();
+                return 1;
+            };
+            return 0;
+        },
+        .imports => |opts| {
+            const key = keys.resolve(io, opts.key, key_paths) catch |e| {
+                try printKeyError(io, err, e, opts.key, key_paths);
+                return 1;
+            };
+            imports.run(gpa, io, opts, key) catch |e| {
+                if (e == error.KeyMissing) {
+                    try printKeyMissing(io, err, key_paths);
+                } else {
+                    try err.print("rezig imports: {s}\n", .{@errorName(e)});
+                }
                 try err.flush();
                 return 1;
             };

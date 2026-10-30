@@ -131,6 +131,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 ctx.gpr[f.rt] = ctx.load8(at);
                 ctx.gpr[f.ra] = at;
             },
+            .sth => |f| ctx.store16(addr(ctx, f.ra, f.imm), ctx.gpr[f.rt]),
             .ld => |f| ctx.gpr[f.rt] = ctx.load64(dsAddr(ctx, f.ra, f.ds)),
             .ldu => |f| {
                 if (f.ra == 0 or f.ra == f.rt) return error.InvalidUpdate;
@@ -158,6 +159,22 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .extsh => |f| ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(ctx.gpr[f.rt]))))))),
             .extsb => |f| ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i8, @bitCast(@as(u8, @truncate(ctx.gpr[f.rt]))))))),
             .extsw => |f| ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.gpr[f.rt]))))))),
+            .and_ => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] & ctx.gpr[f.rb],
+            .frsp => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra]))),
+            .fneg => |f| ctx.fpr[f.frd] = -ctx.fpr[f.fra],
+            .fcfid => |f| ctx.fpr[f.frd] = @floatFromInt(@as(i64, @bitCast(ctx.fpr[f.fra]))),
+            .xori => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] ^ f.imm,
+            .subfic => |f| ctx.gpr[f.ra] = @as(u64, @bitCast(@as(i64, f.imm))) -% ctx.gpr[f.rt],
+            .rldicr => |f| ctx.gpr[f.ra] = std.math.rotl(u64, ctx.gpr[f.rs], f.sh) & rldicrMask(f.me),
+            .stfiwx => |f| ctx.store32(xaddr(ctx, f.ra, f.rb), @as(u32, @truncate(@as(u64, @bitCast(ctx.fpr[f.rt]))))),
+            .cntlzw => |f| ctx.gpr[f.ra] = @clz(@as(u32, @truncate(ctx.gpr[f.rt]))),
+            .stbx => |f| ctx.store8(xaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
+            .lfsx => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(xaddr(ctx, f.fra, f.frb))))))),
+            .lhz => |f| ctx.gpr[f.rt] = ctx.load16(addr(ctx, f.ra, f.imm)),
+            .rlwimi => |f| {
+                const mask = mask32(f.mb, f.me);
+                ctx.gpr[f.ra] = (ctx.gpr[f.ra] & ~@as(u64, mask)) | (@as(u64, std.math.rotl(u32, @as(u32, @truncate(ctx.gpr[f.rs])), f.sh)) & mask);
+            },
             .stw => |f| ctx.store32(addr(ctx, f.ra, f.imm), ctx.gpr[f.rt]),
             .stwu => |f| {
                 if (f.ra == 0) return error.InvalidUpdate;
@@ -178,6 +195,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .fsubs => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) - @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fmuls => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) * @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fdivs => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) / @as(f32, @floatCast(ctx.fpr[f.frb]))),
+            .fmadds => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) * @as(f32, @floatCast(ctx.fpr[f.frc])) + @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fctiwz => |f| ctx.fpr[f.frd] = @floatFromInt(@as(i32, @intFromFloat(ctx.fpr[f.fra]))),
             .lfd => |f| ctx.fpr[f.frd] = @bitCast(ctx.load64(addr(ctx, f.ra, f.imm))),
             .stfd => |f| ctx.store64(addr(ctx, f.ra, f.imm), @bitCast(ctx.fpr[f.frd])),
@@ -214,6 +232,11 @@ fn sraw32(value: u64, shift: u6) u64 {
     const x: i32 = @truncate(@as(i64, @bitCast(value)));
     if (shift >= 32) return @as(u32, @bitCast(x >> 31));
     return @as(u32, @bitCast(x >> @intCast(shift)));
+}
+
+fn rldicrMask(me: u5) u64 {
+    if (me == 63) return 0xFFFFFFFFFFFFFFFF;
+    return ~((@as(u64, 1) << @intCast(63 - @as(u6, me))) - 1);
 }
 
 fn base(ctx: *const ctx_mod.Ctx, ra: u8) u64 {
