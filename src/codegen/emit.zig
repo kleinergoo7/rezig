@@ -259,8 +259,8 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
         .add => try binop(allocator, out, "+%", op.add.rt, op.add.ra, op.add.rb),
         .subf => try subf(allocator, out, op.subf.rt, op.subf.ra, op.subf.rb),
         .mullw => try binop(allocator, out, "*%", op.mullw.rt, op.mullw.ra, op.mullw.rb),
-        .sraw => try binop(allocator, out, "sraw", op.sraw.ra, op.sraw.rt, op.sraw.rb),
-        .srawi => try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, @bitCast(@as(i32, @truncate(@as(i64, @bitCast(ctx.gpr[{d}])))) >> {d}));\n", .{
+        .sraw => try out.print(allocator, "    ctx.gpr[{d}] = ctx.sraw32(ctx.gpr[{d}], ctx.gpr[{d}]);\n", .{ op.sraw.ra, op.sraw.rt, op.sraw.rb }),
+        .srawi => try out.print(allocator, "    ctx.gpr[{d}] = ctx.sraw32(ctx.gpr[{d}], {d});\n", .{
             op.srawi.ra, op.srawi.rs, op.srawi.sh,
         }),
         .rlwinm => try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, std.math.rotl(u32, @as(u32, @truncate(ctx.gpr[{d}])), {d})) & 0x{X:0>8};\n", .{
@@ -346,13 +346,14 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
         .stwx => try indexedStore(allocator, out, op.stwx.rt, op.stwx.ra, op.stwx.rb, 32),
         .mulli => {
             try out.appendSlice(allocator, "    {\n");
-            try out.print(allocator, "        const _m: i32 = @as(i32, @truncate(ctx.gpr[{d}]));\n", .{op.mulli.ra});
+            try out.print(allocator, "        const _t: u32 = @truncate(ctx.gpr[{d}]);\n", .{op.mulli.ra});
+            try out.appendSlice(allocator, "        const _m: i32 = @bitCast(_t);\n");
             try out.print(allocator, "        ctx.gpr[{d}] = @bitCast(@as(i64, _m *% @as(i32, {d})));\n", .{ op.mulli.rt, op.mulli.imm });
             try out.appendSlice(allocator, "    }\n");
         },
-        .extsh => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i16, @truncate(ctx.gpr[{d}])))));\n", .{ op.extsh.ra, op.extsh.rt }),
-        .extsb => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i8, @truncate(ctx.gpr[{d}])))));\n", .{ op.extsb.ra, op.extsb.rt }),
-        .extsw => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i32, @truncate(ctx.gpr[{d}])))));\n", .{ op.extsw.ra, op.extsw.rt }),
+        .extsh => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(ctx.gpr[{d}])))))));\n", .{ op.extsh.ra, op.extsh.rt }),
+        .extsb => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i8, @bitCast(@as(u8, @truncate(ctx.gpr[{d}])))))));\n", .{ op.extsb.ra, op.extsb.rt }),
+        .extsw => try out.print(allocator, "    ctx.gpr[{d}] = @as(u64, @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.gpr[{d}])))))));\n", .{ op.extsw.ra, op.extsw.rt }),
         .std => try store64(allocator, out, op.std.rt, op.std.ra, op.std.ds, false),
         .stdu => try store64(allocator, out, op.stdu.rt, op.stdu.ra, op.stdu.ds, true),
         .cntlzw => try out.print(allocator, "    ctx.gpr[{d}] = @clz(@as(u32, @truncate(ctx.gpr[{d}])));\n", .{ op.cntlzw.ra, op.cntlzw.rt }),
@@ -430,10 +431,6 @@ fn immU32Shifted(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, 
 }
 
 fn binop(allocator: std.mem.Allocator, out: *std.ArrayList(u8), comptime op: []const u8, rt: u8, ra: u8, rb: u8) !void {
-    if (std.mem.eql(u8, op, "sraw")) {
-        try out.print(allocator, "    ctx.gpr[{d}] = @as(u32, @bitCast(@as(i32, @truncate(@as(i64, @bitCast(ctx.gpr[{d}])))) >> @as(u32, @truncate(ctx.gpr[{d}]))));\n", .{ gpr(rt), gpr(ra), gpr(rb) });
-        return;
-    }
     try out.print(allocator, "    ctx.gpr[{d}] = ctx.gpr[{d}] {s} ctx.gpr[{d}];\n", .{ gpr(rt), gpr(ra), op, gpr(rb) });
 }
 
@@ -581,7 +578,7 @@ fn store64(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, ra: u8
 
 fn indexedLoad(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, ra: u8, rb: u8, comptime size: u8) !void {
     if (ra == 0) {
-        try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}(@as(u32, @truncate(ctx.gpr[{d}]));\n", .{ rt, size * 8, rb });
+        try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}(@as(u32, @truncate(ctx.gpr[{d}])));\n", .{ rt, size * 8, rb });
     } else {
         try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}])));\n", .{ rt, size * 8, ra, rb });
     }

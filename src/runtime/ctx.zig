@@ -262,6 +262,13 @@ pub const Ctx = struct {
         return out;
     }
 
+    pub fn sraw32(_: *const Ctx, value: u64, shift: u64) u32 {
+        const x: i32 = @bitCast(@as(u32, @truncate(value)));
+        const s: u6 = @truncate(shift);
+        if (s >= 32) return @bitCast(x >> 31);
+        return @bitCast(x >> @as(u5, @truncate(s)));
+    }
+
     pub fn fetchInsn(self: *Ctx, addr: u32) u32 {
         return @intCast(self.load(u32, addr, .fetch));
     }

@@ -58,7 +58,8 @@ compares GPRs, FPRs, CR, XER, LR, CTR, fault kind/address/size, and every byte o
 - **VMX/AltiVec breadth.** Only `vor`, `vxor`, `vaddfp`, `lvx` and `stvx` are decoded and
   emitted; the rest of the vector ISA is missing.
 - **Decoder gaps.** 581,975 instruction instances, mostly primary opcodes 31, 62, 04, 58, 40.
-- **Whole-image emission.** The call-closed slice tops out near 1,200 functions today.
+- **Whole-image emission.** `codegen --all` emits all 15,629 supported functions in 16 chunks;
+  they compile and link (316 MB Debug object).
 - **Indirect branches.** `bctr` and non-return `bclr` are not lowered.
 
 `docs/STATUS.md` records the detailed numbers, known bugs and limits.
@@ -150,7 +151,7 @@ key. rezig rejects it with `BadKeySize`.
 
 1. Complete the decoder and VMX, measured by `zig build coverage`.
 2. Lower indirect calls and branches.
-3. Emit the whole image in chunks and compile it.
+3. Boot trace: run the entry point under stubs and work the kernel surface from the log.
 4. Minimal kernel HLE: memory, threads, events, files, timing.
 5. Xenos command capture, then shaders, textures and Vulkan presentation.
 6. Audio, input, saves.

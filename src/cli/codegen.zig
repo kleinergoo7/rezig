@@ -89,15 +89,95 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     }
     defer allocator.free(picked);
 
+    if (opts.all == true) {
+        const chunk_size: usize = 1000;
+        var chunks: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (chunks.items) |c| allocator.free(c);
+            chunks.deinit(allocator);
+        }
+
+        var i: usize = 0;
+        var index: usize = 0;
+        while (i < picked.len) {
+            const end = @min(i + chunk_size, picked.len);
+            const chunk = picked[i..end];
+
+            var out = std.ArrayList(u8).empty;
+            errdefer out.deinit(allocator);
+            try out.appendSlice(allocator, header);
+            for (chunk, 0..) |candidate, j| {
+                if (j != 0) try out.append(allocator, '\n');
+                const text = try emit.function(allocator, candidate.words, .{ .addr = candidate.addr });
+                defer allocator.free(text);
+                try out.appendSlice(allocator, text);
+            }
+            try out.appendSlice(allocator, "\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
+            for (chunk) |candidate| {
+                var name_buf: [10]u8 = undefined;
+                try out.print(allocator, "        0x{X} => {{\n            {s}(ctx);\n            return true;\n        }},\n", .{
+                    candidate.addr, abi.fnName(candidate.addr, &name_buf),
+                });
+            }
+            try out.appendSlice(allocator, "        else => false,\n    };\n}\n");
+
+            const name = try std.fmt.allocPrint(allocator, "chunk_{d:0>3}.zig", .{index});
+            defer allocator.free(name);
+            var dir = try Io.Dir.cwd().createDirPathOpen(io, opts.out, .{});
+            defer dir.close(io);
+            var atomic = try dir.createFileAtomic(io, name, .{ .replace = true });
+            defer atomic.deinit(io);
+            try atomic.file.writeStreamingAll(io, out.items);
+            try atomic.replace(io);
+            out.deinit(allocator);
+
+            const owned = try allocator.dupe(u8, name);
+            try chunks.append(allocator, owned);
+
+            i = end;
+            index += 1;
+        }
+
+        var central = std.ArrayList(u8).empty;
+        defer central.deinit(allocator);
+        try central.appendSlice(allocator, "const std = @import(\"std\");\n");
+        try central.appendSlice(allocator, "const Ctx = @import(\"rezig_runtime\").ctx.Ctx;\n\n");
+        for (chunks.items, 0..) |name, ci| {
+            try central.print(allocator, "const chunk_{d:0>3} = @import(\"{s}\");\n", .{ ci, name });
+        }
+        try central.appendSlice(allocator, "\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n");
+        for (chunks.items, 0..) |_, ci| {
+            try central.print(allocator, "    if (chunk_{d:0>3}.dispatch(addr, ctx)) return true;\n", .{ci});
+        }
+        try central.appendSlice(allocator, "    return false;\n}\n");
+
+        var dir = try Io.Dir.cwd().createDirPathOpen(io, opts.out, .{});
+        defer dir.close(io);
+        var atomic = try dir.createFileAtomic(io, "dispatch.zig", .{ .replace = true });
+        defer atomic.deinit(io);
+        try atomic.file.writeStreamingAll(io, central.items);
+        try atomic.replace(io);
+
+        var addr_list = try allocator.alloc(u32, picked.len);
+        defer allocator.free(addr_list);
+        for (picked, 0..) |candidate, j| addr_list[j] = candidate.addr;
+        var list_buf: [512]u8 = undefined;
+        const list_path = try std.fmt.bufPrint(&list_buf, "{s}/addresses.json", .{opts.out});
+        try slice.writeAddressList(allocator, io, list_path, addr_list);
+
+        var buf: [256]u8 = undefined;
+        var writer = Io.File.stdout().writer(io, &buf);
+        try writer.interface.print("emitted {d} functions in {d} chunks to {s}\n", .{ picked.len, chunks.items.len, opts.out });
+        try writer.interface.flush();
+        return;
+    }
+
     var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     try out.appendSlice(allocator, header);
     for (picked, 0..) |candidate, i| {
         if (i != 0) try out.append(allocator, '\n');
-        const text = emit.function(allocator, candidate.words, .{ .addr = candidate.addr }) catch |e| {
-            std.debug.print("codegen fail addr 0x{X}: {s}\n", .{ candidate.addr, @errorName(e) });
-            return e;
-        };
+        const text = try emit.function(allocator, candidate.words, .{ .addr = candidate.addr });
         defer allocator.free(text);
         try out.appendSlice(allocator, text);
     }

@@ -58,10 +58,14 @@ Two facts this exposed:
 ## Whole-image budget
 
 - 1,000 emitted functions: 1.0 s to compile, 163 MB peak RSS, 16.8 MB Debug object.
-- 14,282 functions as one file: 82.3 MB of Zig source, and the compiler rejects it
-  (spurious "expected signed integer type" errors past roughly 2,000 functions).
-- Chunked compilation is therefore not optional. The generated project needs one Zig module
-  per ~1,000 functions plus a small central dispatch module.
+- A single 82.3 MB file does not compile: the compiler misreports type errors past roughly
+  2,000 functions, so `codegen --all` emits 16 chunks of ~1,000 functions plus a central
+  `dispatch.zig`.
+- All 15,629 supported functions compile and link: 6.7 s wall, 1.1 GB peak RSS, 316 MB Debug
+  object, 15,629 guest symbols present.
+- The chunked build caught six emitter bugs the 50-function gate could not: two missing
+  parentheses, `mulli`/`extsh`/`extsb`/`extsw` sign conversions, an `&`-vs-`+%` precedence fault
+  in every address computation, and a 64-bit carry in `stwu` updates.
 - Call-closed selection tops out near 1,200 functions because call targets must be emittable too.
 
 ## Conversion
@@ -95,8 +99,8 @@ Done and verified on the real disc:
 - discovery: 26,590 leaf candidates in `.text`; 9,121 inside the current subset.
 - codegen: 50 functions from `tests/slice/addresses.json`, `zig fmt` clean.
 - coverage, now seeded from `.pdata`: 24,513 function starts, 28,038 discovered functions,
-  1,800,711 unique instructions = 76.73% of `.text` (2,346,754 words). 83.77% of instruction
-  instances decode and emit, 2,915 functions are fully emittable. Integer, single-precision
+  1,800,711 unique instructions = 76.73% of `.text` (2,346,754 words). 95.52% of instruction
+  instances decode and emit, 15,629 functions are fully emittable (55.74%). Integer, single-precision
   float, branches, calls, tail calls and the five decoded VMX ops (`vor`, `vxor`, `vaddfp`,
   `lvx`, `stvx`) are lowered. The remaining limit is decoding: 581,975 instruction instances,
   mostly primary opcodes 31, 62, 04, 58 and 40. `coverage` now prints the top
