@@ -51,4 +51,4 @@ needs oracle traces that are not in this repo yet.
 
 ## Licence
 
-Not chosen yet.
+GPL-3.0-or-later. See `LICENSE` and `NOTICE`.

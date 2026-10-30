@@ -68,6 +68,10 @@ Two facts this exposed:
   The step is a thin wrapper around the external binary and is never part of `zig build` or
   `zig build test`. Without `-Dxextool` it looks for `XexTool` on `PATH`.
 
+## Licence
+
+GPL-3.0-or-later, chosen because the XEX writer comes from the GPL Zig port of XexTool.
+
 ## Toolchain notes
 
 - `zig objdump` is a stub in 0.17.0 (`TODO dump elf file`). `llvm-objdump` (Homebrew) disassembles
