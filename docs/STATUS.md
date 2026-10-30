@@ -27,6 +27,13 @@ GTA IV USA disc 1.0, no title update:
   `0` meaning none; the field at volume offset `0x1C` is not an image size, so entry bounds come
   from the source file size.
 
+## Toolchain notes
+
+- `zig objdump` is a stub in 0.17.0 (`TODO dump elf file`). `llvm-objdump` (Homebrew) disassembles
+  PowerPC64 objects correctly; `zig build-obj -target powerpc64-linux-gnu` assembles them. Use that
+  pair to verify instruction encodings for Task 9 instead of hand-transcribing them.
+- PE headers inside a XEX image are little-endian, even though guest code is big-endian.
+
 ## Blocked
 
 - 20-function gate needs a user-supplied 16-byte XEX key. Without it `analyze`, `codegen` and
