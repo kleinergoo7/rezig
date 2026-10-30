@@ -29,6 +29,26 @@ GTA IV USA disc 1.0, no title update:
   `0` meaning none; the field at volume offset `0x1C` is not an image size, so entry bounds come
   from the source file size.
 
+## Unlocked image gate (2026-10-30)
+
+XexTool 7.0 built in `/tmp/opencode/xextool/build`, then:
+
+```
+zig build unlock -Dxex=data/gta4/default.xex -Dxextool=/tmp/opencode/xextool/build/XexTool
+zig build analyze -Dxex=data/gta4/default.xex.unenc
+```
+
+Output: version `0.0.0.5`, title `545407F2`, base `0x82000000`, entry `0x829A0860`,
+image `0x011F0000`, 13 PE sections. `.text` rva `0x120000` size `0x008E32AC`; bytes there start
+`7d8802a6` (`mflr r12`), so the payload is a memory image indexed by RVA.
+
+Two facts this exposed:
+
+- `SizeOfImage` (`0x135B000`) is larger than the stored payload (`0x11F0000`) and some sections
+  extend past it; the tail is zero-filled at load. Loader checks relaxed accordingly.
+- XexTool's `-e u` decrypts but keeps basic compression; `-c u` does not rewrite the block table.
+  Our loader handles that combination.
+
 ## Blocked
 
 - The 20-function gate needs real oracle traces from the offline rexglue oracle, and an unlocked

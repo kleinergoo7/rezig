@@ -45,8 +45,13 @@ pub const Image = struct {
         self.* = undefined;
     }
 
+    /// A section may extend past the stored image; the missing tail is zero-filled by the guest.
     pub fn sectionBytes(self: *const Image, section: PeSection) []const u8 {
-        return self.bytes[section.virtual_address..][0..section.virtual_size];
+        const start: usize = section.virtual_address;
+        if (start >= self.bytes.len) return &.{};
+        const available = self.bytes.len - start;
+        const size = @min(@as(usize, section.virtual_size), available);
+        return self.bytes[start..][0..size];
     }
 
     pub fn isExecutable(self: *const Image, section: PeSection) bool {
@@ -193,7 +198,8 @@ fn parsePe(allocator: std.mem.Allocator, bytes: []const u8, encrypted: bool) Err
     const base_address = std.mem.readInt(u32, bytes[optional + 28 ..][0..4], .little);
     const size_of_image = std.mem.readInt(u32, bytes[optional + 56 ..][0..4], .little);
 
-    if (size_of_image > bytes.len) return invalid;
+    // SizeOfImage covers zero-filled pages that the XEX payload does not store.
+    if (size_of_image == 0 or size_of_image > 0x4000_0000) return invalid;
     if (entry_rva >= size_of_image) return invalid;
 
     const table = optional + @as(u32, optional_size);
@@ -208,8 +214,8 @@ fn parsePe(allocator: std.mem.Allocator, bytes: []const u8, encrypted: bool) Err
         const raw = bytes[at..];
         const virtual_size = std.mem.readInt(u32, raw[8..12], .little);
         const virtual_address = std.mem.readInt(u32, raw[12..16], .little);
-        if (virtual_address > bytes.len) return invalid;
-        if (virtual_size > bytes.len - virtual_address) return invalid;
+        if (virtual_address >= size_of_image) return invalid;
+        if (virtual_size > size_of_image - virtual_address) return invalid;
 
         section.* = .{
             .name = raw[0..8].*,
@@ -400,4 +406,32 @@ test "encrypted input without a key reports key missing" {
     const path = try writeFixture(io, &tmp, "encrypted-nokey.xex", bytes, &path_buf);
 
     try testing.expectError(error.KeyMissing, load(testing.allocator, io, path, null));
+}
+
+test "sections may extend past the stored image" {
+    const io = Io.Threaded.global_single_threaded.io();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const bytes = try xex_writer.buildFull(testing.allocator, 0, 1);
+    defer testing.allocator.free(bytes);
+
+    const pe = xex_writer.header_size;
+    const nt = pe + 0x80;
+    const optional = nt + 24;
+    const section_table = optional + 0xE0;
+    const data_section = section_table + 40;
+
+    // SizeOfImage covers zero pages the payload does not store.
+    std.mem.writeInt(u32, bytes[optional + 56 ..][0..4], 0x3000, .little);
+    std.mem.writeInt(u32, bytes[data_section + 8 ..][0..4], 0x1000, .little);
+
+    var path_buf: [256]u8 = undefined;
+    const path = try writeFixture(io, &tmp, "bss.xex", bytes, &path_buf);
+
+    var img = try load(testing.allocator, io, path, zero_key);
+    defer img.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), img.sections.len);
+    try testing.expectEqual(@as(usize, 0x800), img.sectionBytes(img.sections[1]).len);
 }
