@@ -283,6 +283,20 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .stfd => |f| ctx.store64(addr(ctx, f.ra, f.imm), @bitCast(ctx.fpr[f.frd])),
             .lvx => |f| ctx.vmx[f.vd] = ctx.loadVmx(vaddr(ctx, f.ra, f.rb)),
             .stvx => |f| ctx.storeVmx(vaddr(ctx, f.ra, f.rb), ctx.vmx[f.vd]),
+            .lvewx => |f| ctx.vmx[f.vd] = ctx.lvewx(vaddr(ctx, f.ra, f.rb)),
+            .vmx => |f| {
+                switch (f.kind) {
+                    .vcmpequq, .vcmpequd, .vcmpeqfp, .vcmpneb, .vucmprlb, .vcmpnezb, .vcmpneh, .vcmpnezh, .vcmpnezw => {
+                        ctx.vmx[f.vd] = ctx.vmxCmp(@backingInt(f.kind), ctx.vmx[f.va], ctx.vmx[f.vb]);
+                    },
+                    .vadduwm => ctx.vmx[f.vd] = ctx.vadduwm(ctx.vmx[f.va], ctx.vmx[f.vb]),
+                    .vdivud => ctx.vmx[f.vd] = ctx.vdivud(ctx.vmx[f.va], ctx.vmx[f.vb]),
+                    .vslb => ctx.vmx[f.vd] = ctx.vslb(ctx.vmx[f.va], ctx.vmx[f.vb]),
+                    .vsel => ctx.vmx[f.vd] = ctx.vsel(ctx.vmx[f.va], ctx.vmx[f.vb], ctx.vmx[f.vc]),
+                    .vsldoi => ctx.vmx[f.vd] = ctx.vsldoi(ctx.vmx[f.va], ctx.vmx[f.vb], @truncate(f.imm)),
+                    .vnmsubfp => ctx.vmx[f.vd] = ctx.vnmsubfp(ctx.vmx[f.va], ctx.vmx[f.vb], ctx.vmx[f.vc]),
+                }
+            },
             .vor => |f| ctx.vmx[f.vd] = ctx.vor(ctx.vmx[f.va], ctx.vmx[f.vb]),
             .vxor => |f| ctx.vmx[f.vd] = ctx.vxor(ctx.vmx[f.va], ctx.vmx[f.vb]),
             .vaddfp => |f| ctx.vmx[f.vd] = ctx.vaddfp(ctx.vmx[f.va], ctx.vmx[f.vb]),

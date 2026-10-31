@@ -104,6 +104,8 @@ pub fn supports(op: insn) bool {
         .stfs,
         .lvx,
         .stvx,
+        .lvewx,
+        .vmx,
         .vor,
         .vxor,
         .vaddfp,
@@ -485,6 +487,27 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
                 else => unreachable,
             };
             try out.print(allocator, "    ctx.vmx[{d}] = ctx.{s}(ctx.vmx[{d}], ctx.vmx[{d}]);\n", .{ vd, name, va, vb });
+        },
+        .lvewx => try out.print(allocator, "    ctx.vmx[{d}] = ctx.lvewx(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}])));\n", .{ op.lvewx.vd, op.lvewx.ra, op.lvewx.rb }),
+        .vmx => |f| {
+            const kind = @tagName(f.kind);
+            switch (f.kind) {
+                .vcmpequq, .vcmpequd, .vcmpeqfp, .vcmpneb, .vucmprlb, .vcmpnezb, .vcmpneh, .vcmpnezh, .vcmpnezw => {
+                    try out.print(allocator, "    ctx.vmx[{d}] = ctx.vmxCmp({d}, ctx.vmx[{d}], ctx.vmx[{d}]);\n", .{ f.vd, @backingInt(f.kind), f.va, f.vb });
+                },
+                .vadduwm, .vdivud, .vslb => {
+                    try out.print(allocator, "    ctx.vmx[{d}] = ctx.{s}(ctx.vmx[{d}], ctx.vmx[{d}]);\n", .{ f.vd, kind, f.va, f.vb });
+                },
+                .vsel => {
+                    try out.print(allocator, "    ctx.vmx[{d}] = ctx.vsel(ctx.vmx[{d}], ctx.vmx[{d}], ctx.vmx[{d}]);\n", .{ f.vd, f.va, f.vb, f.vc });
+                },
+                .vsldoi => {
+                    try out.print(allocator, "    ctx.vmx[{d}] = ctx.vsldoi(ctx.vmx[{d}], ctx.vmx[{d}], {d});\n", .{ f.vd, f.va, f.vb, f.imm & 0xf });
+                },
+                .vnmsubfp => {
+                    try out.print(allocator, "    ctx.vmx[{d}] = ctx.vnmsubfp(ctx.vmx[{d}], ctx.vmx[{d}], ctx.vmx[{d}]);\n", .{ f.vd, f.va, f.vb, f.vc });
+                },
+            }
         },
         .stfs => try fStore(allocator, out, op.stfs.frd, op.stfs.ra, op.stfs.imm),
         .fmsubs => try fma(allocator, out, "f32", "-", op.fmsubs.frd, op.fmsubs.fra, op.fmsubs.frc, op.fmsubs.frb, false),
@@ -1236,6 +1259,14 @@ test "record forms update CR0" {
     const rot_text = try function(testing.allocator, &rot, .{ .addr = 0x100 });
     defer testing.allocator.free(rot_text);
     try testing.expect(std.mem.indexOf(u8, rot_text, "ctx.setCr32(0, ctx.gpr[3], 0, true);") != null);
+}
+
+test "vmx compare and add lower through vector helpers" {
+    const words = [_]u32{ 0x13E05C07, 0x101FF880, 0x4e800020 };
+    const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "ctx.vmx[31] = ctx.vmxCmp(0, ctx.vmx[0], ctx.vmx[11]);") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "ctx.vmx[0] = ctx.vadduwm(ctx.vmx[31], ctx.vmx[31]);") != null);
 }
 
 test "fmul reads the FRC operand and fmadd reads both" {

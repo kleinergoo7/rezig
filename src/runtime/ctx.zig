@@ -529,6 +529,127 @@ pub const Ctx = struct {
         return out;
     }
 
+    /// Same order as `ppc.decode.VmxKind`; the emitter passes the tag value.
+    pub const VmxCmpKind = enum {
+        vcmpneb,
+        vcmpequd,
+        vucmprlb,
+        vcmpnezb,
+        vcmpneh,
+        vcmpequq,
+        vcmpnezh,
+        vcmpnezw,
+        vcmpeqfp,
+    };
+
+    pub fn vmxCmp(self: *Ctx, kind: u8, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = @splat(0);
+        switch (@as(VmxCmpKind, @fromBackingInt(@intCast(kind)))) {
+            .vcmpequq => {
+                if (std.mem.eql(u8, &a, &b)) out = @splat(0xFF);
+            },
+            .vcmpequd => for (0..2) |i| {
+                const at = i * 8;
+                if (std.mem.eql(u8, a[at..][0..8], b[at..][0..8])) @memset(out[at..][0..8], 0xFF);
+            },
+            .vcmpeqfp => for (0..4) |i| {
+                const at = i * 4;
+                const x: f32 = @bitCast(std.mem.readInt(u32, a[at..][0..4], .big));
+                const y: f32 = @bitCast(std.mem.readInt(u32, b[at..][0..4], .big));
+                if (x == y) @memset(out[at..][0..4], 0xFF);
+            },
+            .vcmpneb => for (0..16) |i| {
+                if (a[i] != b[i]) out[i] = 0xFF;
+            },
+            .vucmprlb => for (0..16) |i| {
+                if (a[i] < b[i]) out[i] = 0xFF;
+            },
+            .vcmpnezb => for (0..16) |i| {
+                if (a[i] != 0) out[i] = 0xFF;
+            },
+            .vcmpneh => for (0..8) |i| {
+                const at = i * 2;
+                if (std.mem.readInt(u16, a[at..][0..2], .big) != std.mem.readInt(u16, b[at..][0..2], .big)) @memset(out[at..][0..2], 0xFF);
+            },
+            .vcmpnezh => for (0..8) |i| {
+                const at = i * 2;
+                if (std.mem.readInt(u16, a[at..][0..2], .big) != 0) @memset(out[at..][0..2], 0xFF);
+            },
+            .vcmpnezw => for (0..4) |i| {
+                const at = i * 4;
+                if (std.mem.readInt(u32, a[at..][0..4], .big) != 0) @memset(out[at..][0..4], 0xFF);
+            },
+        }
+        var all = true;
+        var any = false;
+        for (out) |byte| {
+            if (byte == 0) all = false else any = true;
+        }
+        const field: u4 = if (all) 0b1000 else if (!any) 0b0010 else 0b0100;
+        self.setCrField(6, field);
+        return out;
+    }
+
+    pub fn vadduwm(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..4) |i| {
+            const at = i * 4;
+            const x = std.mem.readInt(u32, a[at..][0..4], .big);
+            const y = std.mem.readInt(u32, b[at..][0..4], .big);
+            std.mem.writeInt(u32, out[at..][0..4], x +% y, .big);
+        }
+        return out;
+    }
+
+    pub fn vdivud(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..2) |i| {
+            const at = i * 8;
+            const x = std.mem.readInt(u64, a[at..][0..8], .big);
+            const y = std.mem.readInt(u64, b[at..][0..8], .big);
+            std.mem.writeInt(u64, out[at..][0..8], if (y == 0) 0 else x / y, .big);
+        }
+        return out;
+    }
+
+    pub fn vslb(_: *Ctx, a: [16]u8, b: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..16) |i| out[i] = a[i] << @intCast(b[i] & 7);
+        return out;
+    }
+
+    pub fn vsel(_: *Ctx, a: [16]u8, b: [16]u8, c: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..16) |i| out[i] = (a[i] & c[i]) | (b[i] & ~c[i]);
+        return out;
+    }
+
+    pub fn vsldoi(_: *Ctx, a: [16]u8, b: [16]u8, sh: u5) [16]u8 {
+        var joined: [32]u8 = undefined;
+        @memcpy(joined[0..16], &a);
+        @memcpy(joined[16..32], &b);
+        return joined[sh..][0..16].*;
+    }
+
+    pub fn vnmsubfp(_: *Ctx, a: [16]u8, b: [16]u8, c: [16]u8) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..4) |i| {
+            const at = i * 4;
+            const x: f32 = @bitCast(std.mem.readInt(u32, a[at..][0..4], .big));
+            const y: f32 = @bitCast(std.mem.readInt(u32, b[at..][0..4], .big));
+            const z: f32 = @bitCast(std.mem.readInt(u32, c[at..][0..4], .big));
+            std.mem.writeInt(u32, out[at..][0..4], @bitCast(-(x * y) + z), .big);
+        }
+        return out;
+    }
+
+    pub fn lvewx(self: *Ctx, addr: u32) [16]u8 {
+        var out: [16]u8 = @splat(0);
+        const lane: u32 = (addr >> 2) & 3;
+        std.mem.writeInt(u32, out[lane * 4 ..][0..4], @truncate(self.load32(addr)), .big);
+        return out;
+    }
+
     pub fn vspltisw(_: *Ctx, simm: i5) [16]u8 {
         const v: u32 = @bitCast(@as(i32, simm));
         var out: [16]u8 = undefined;

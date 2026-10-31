@@ -28,6 +28,24 @@ pub const TwForm = struct { to: u5, ra: u8, rb: u8 };
 pub const CrKind = enum { crand, crandc, creqv, crnand, crnor, cror, crorc, crxor };
 pub const CrOpForm = struct { kind: CrKind, bt: u5, ba: u5, bb: u5 };
 pub const McrfForm = struct { crf_d: u3, crf_s: u3 };
+pub const VmxKind = enum {
+    vcmpneb,
+    vcmpequd,
+    vucmprlb,
+    vcmpnezb,
+    vcmpneh,
+    vcmpequq,
+    vcmpnezh,
+    vcmpnezw,
+    vcmpeqfp,
+    vadduwm,
+    vdivud,
+    vnmsubfp,
+    vsldoi,
+    vsel,
+    vslb,
+};
+pub const VmxForm = struct { kind: VmxKind, vd: u8, va: u8, vb: u8, vc: u8, imm: u5, rc: bool = false };
 pub const FForm = struct { frd: u8, fra: u8, frb: u8, rc: bool = false };
 pub const FCmpForm = struct { crf: u3, fra: u8, frb: u8 };
 pub const FdForm = struct { frd: u8, ra: u8, imm: i16 };
@@ -210,6 +228,8 @@ pub const Instruction = union(enum) {
     stfd: FdForm,
     lvx: VMemForm,
     stvx: VMemForm,
+    lvewx: VMemForm,
+    vmx: VmxForm,
     vxor: VForm,
     vaddfp: VForm,
     vor: VForm,
@@ -458,6 +478,7 @@ fn decodeXForm(word: u32) Error!Instruction {
         279 => .{ .lwzx = xForm(word) },
         535 => .{ .lfsx = .{ .frd = rt(word), .fra = ra(word), .frb = rb(word), .rc = word & 1 != 0 } },
         599 => .{ .lfdx = .{ .frd = rt(word), .fra = ra(word), .frb = rb(word), .rc = word & 1 != 0 } },
+        71 => .{ .lvewx = vMemForm(word) },
         103 => .{ .lvx = vMemForm(word) },
         231 => .{ .stvx = vMemForm(word) },
         else => error.Unsupported,
@@ -507,6 +528,20 @@ fn decodeAForm(word: u32, primary: u8) Error!Instruction {
     };
 }
 
+fn vmxForm(kind: VmxKind, word: u32) Instruction {
+    const four_reg = kind == .vsldoi or kind == .vsel or kind == .vnmsubfp;
+    const vc: u8 = if (four_reg) @truncate((word >> 6) & 0x1f) else 0;
+    return .{ .vmx = .{
+        .kind = kind,
+        .vd = rt(word),
+        .va = ra(word),
+        .vb = rb(word),
+        .vc = vc,
+        .imm = if (kind == .vsldoi) @truncate(vc) else 0,
+        .rc = word & 1 != 0,
+    } };
+}
+
 fn decodeVForm(word: u32) Error!Instruction {
     const xo6 = word & 0x3f;
     if (xo6 == 43) {
@@ -533,6 +568,21 @@ fn decodeVForm(word: u32) Error!Instruction {
     }
     const xo = word & 0x7ff;
     return switch (xo) {
+        0x080 => vmxForm(.vadduwm, word),
+        0x0C3 => vmxForm(.vucmprlb, word),
+        0x0C6 => vmxForm(.vcmpeqfp, word),
+        0x0C7 => vmxForm(.vcmpequd, word),
+        0x0CB => vmxForm(.vdivud, word),
+        0x104 => vmxForm(.vslb, word),
+        0x187 => vmxForm(.vcmpnezw, word),
+        0x1C7 => vmxForm(.vcmpequq, word),
+        0x22C => vmxForm(.vsldoi, word),
+        0x26A => vmxForm(.vsel, word),
+        0x02F => vmxForm(.vnmsubfp, word),
+        0x407 => vmxForm(.vcmpneb, word),
+        0x447 => vmxForm(.vcmpneh, word),
+        0x507 => vmxForm(.vcmpnezb, word),
+        0x547 => vmxForm(.vcmpnezh, word),
         6 => .{ .vcmpequb = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
         518 => .{ .vcmpgtub = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
         1028 => .{ .vand = .{ .vd = rt(word), .va = ra(word), .vb = rb(word) } },
@@ -784,6 +834,11 @@ test "record forms carry the rc bit" {
     try expectDecode(0x5483003f, .{ .rlwinm = .{ .ra = 3, .rs = 4, .sh = 0, .mb = 0, .me = 31, .rc = true } });
     try expectDecode(0x7c632215, .{ .add = .{ .rt = 3, .ra = 3, .rb = 4, .rc = true } });
     try expectDecode(0x7c632039, .{ .and_ = .{ .rt = 3, .ra = 3, .rb = 4, .rc = true } });
+}
+
+test "vmx compare and add forms decode" {
+    try expectDecode(0x13E05C07, .{ .vmx = .{ .kind = .vcmpneb, .vd = 31, .va = 0, .vb = 11, .vc = 0, .imm = 0, .rc = true } });
+    try expectDecode(0x101FF880, .{ .vmx = .{ .kind = .vadduwm, .vd = 0, .va = 31, .vb = 31, .vc = 0, .imm = 0 } });
 }
 
 test "a-form float encodings use FRC and FRB correctly" {

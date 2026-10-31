@@ -72,12 +72,19 @@ pub fn functionsFrom(
             error.OutOfRange, error.NoTerminator => continue,
             else => |other| return other,
         };
-        // A `.pdata` seed can point at linker padding left by a removed
-        // function. Real code never starts with a zero word.
-        if (words.len == 0 or words[0] == 0) {
+        // A `.pdata` seed can point at linker padding, an import thunk or a
+        // data table left by a removed function. Real code starts with an
+        // instruction the decoder knows.
+        // shortcut: a real function starting with a still-unsupported opcode
+        // is dropped too; add that opcode before trusting this filter.
+        if (words.len == 0) {
             allocator.free(words);
             continue;
         }
+        _ = decode.decode(words[0]) catch {
+            allocator.free(words);
+            continue;
+        };
         errdefer allocator.free(words);
 
         var calls: std.ArrayList(u32) = .empty;
@@ -279,6 +286,17 @@ test "a function without blr reports its address" {
     try testing.expectError(error.NoTerminator, functionAt(testing.allocator, &sections, 0x100, &err_addr));
     try testing.expectEqual(@as(u32, 0x100 + max_function_insns * 4), err_addr);
     _ = &code;
+}
+
+test "a pdata seed whose first word is not code is skipped" {
+    const code = [_]u32{ 0x010001A4, 0x38600001, ret };
+    const bytes = try beBytes(testing.allocator, &code);
+    defer testing.allocator.free(bytes);
+    const sections = [_]CodeSection{.{ .addr = 0x100, .bytes = bytes }};
+
+    const list = try functionsFrom(testing.allocator, &sections, 0x100, &.{0x100});
+    defer freeFunctions(testing.allocator, list);
+    try testing.expectEqual(@as(usize, 0), list.len);
 }
 
 test "a pdata seed in zero padding is skipped" {
