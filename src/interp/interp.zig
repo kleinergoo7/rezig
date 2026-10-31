@@ -111,7 +111,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 }
                 return;
             },
-            .nop => {},
+            .nop, .padding => {},
             .addi => |f| ctx.gpr[f.rt] = base(ctx, f.ra) +% sext(f.imm),
             .addis => |f| ctx.gpr[f.rt] = base(ctx, f.ra) +% sext32(f.imm),
             .ori => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] | f.imm,
@@ -607,7 +607,7 @@ test "loads and stores go through the faulting memory helpers" {
 test "an unsupported instruction stops with a name" {
     var buf: [16]u8 = @splat(0);
     var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
-    try testing.expectError(error.Unsupported, run(&ctx, &.{0x00000000}));
+    try testing.expectError(error.Unsupported, run(&ctx, &.{0x00000001}));
 }
 
 test "record forms update CR0" {

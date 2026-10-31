@@ -40,6 +40,7 @@ fn rcSupported(op: insn) bool {
 pub fn supports(op: insn) bool {
     if (!rcSupported(op)) return false;
     return switch (op) {
+        .padding,
         .addi,
         .addis,
         .ori,
@@ -375,7 +376,7 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
                 addr +% 4, call, target, target,
             });
         },
-        .nop => {},
+        .nop, .padding => {},
         .addi => try immAdd(allocator, out, op.addi.rt, op.addi.ra, sext(op.addi.imm)),
         .addis => try immAdd(allocator, out, op.addis.rt, op.addis.ra, sext32(op.addis.imm)),
         .ori => try immU32(allocator, out, "|", op.ori.ra, op.ori.rt, op.ori.imm),

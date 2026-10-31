@@ -41,6 +41,11 @@ pub const VmaddForm = struct { vd: u8, va: u8, vc: u8, vb: u8 };
 pub const VSplatForm = struct { vd: u8, simm: i5 };
 
 pub const Instruction = union(enum) {
+    /// Zero words inside a `.pdata` bound are linker padding. Execution must
+    /// never reach them; lowering them as a no-op keeps the body contiguous.
+    /// shortcut: padding is not proven unreachable, replace with CFG blocks
+    /// when data-bearing functions are verified.
+    padding,
     addi: DForm,
     addis: DForm,
     addic: AddicForm,
@@ -219,6 +224,7 @@ pub const Instruction = union(enum) {
 };
 
 pub fn decode(word: u32) Error!Instruction {
+    if (word == 0) return .padding;
     if (word == 0x60000000) return .nop;
     const op = word >> 26;
     return switch (op) {
@@ -799,5 +805,5 @@ test "integer and system encodings decode" {
 }
 
 test "unknown words are refused" {
-    try testing.expectError(error.Unsupported, decode(0x00000000));
+    try testing.expectError(error.Unsupported, decode(0x00000001));
 }

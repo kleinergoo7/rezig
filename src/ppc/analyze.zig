@@ -72,6 +72,12 @@ pub fn functionsFrom(
             error.OutOfRange, error.NoTerminator => continue,
             else => |other| return other,
         };
+        // A `.pdata` seed can point at linker padding left by a removed
+        // function. Real code never starts with a zero word.
+        if (words.len == 0 or words[0] == 0) {
+            allocator.free(words);
+            continue;
+        }
         errdefer allocator.free(words);
 
         var calls: std.ArrayList(u32) = .empty;
@@ -275,6 +281,19 @@ test "a function without blr reports its address" {
     _ = &code;
 }
 
+test "a pdata seed in zero padding is skipped" {
+    const code = [_]u32{ 0, 0, 0, 0, 0x38600001, ret };
+    const bytes = try beBytes(testing.allocator, &code);
+    defer testing.allocator.free(bytes);
+    const sections = [_]CodeSection{.{ .addr = 0x100, .bytes = bytes }};
+
+    const list = try functionsFrom(testing.allocator, &sections, 0x110, &.{ 0x100, 0x110 });
+    defer freeFunctions(testing.allocator, list);
+
+    try testing.expectEqual(@as(usize, 1), list.len);
+    try testing.expectEqual(@as(u32, 0x110), list[0].addr);
+}
+
 test "a pdata bound keeps a zero word inside the body" {
     // addi; 0; addi; blr. The zero is inside the bounded body.
     const code = [_]u32{ 0x38600001, 0, 0x38600002, ret };
@@ -309,7 +328,7 @@ test "a tail branch to an unknown address is discovered" {
 }
 
 test "an undecodable word reports its address" {
-    const code = [_]u32{ save, 0x00000000, ret };
+    const code = [_]u32{ save, 0x00000001, ret };
     const bytes = try beBytes(testing.allocator, &code);
     defer testing.allocator.free(bytes);
     const sections = [_]CodeSection{.{ .addr = 0x100, .bytes = bytes }};
