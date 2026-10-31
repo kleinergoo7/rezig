@@ -9,3 +9,4 @@ oracle/
 *.xexp
 
 zig-pkg/
+artifacts/
