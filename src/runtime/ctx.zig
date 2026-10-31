@@ -24,10 +24,13 @@ pub const Ctx = struct {
     spr: [1024]u64,
     reserve_addr: u32,
     reserve_valid: bool,
+    depth: u32,
     /// Instruction budget for generated code. `0` means unlimited.
     budget: u32,
     mem: memory.Memory,
     fault: Fault,
+
+    pub const max_call_depth: u32 = 4096;
 
     pub fn init(mem: memory.Memory) Ctx {
         return .{
@@ -43,6 +46,7 @@ pub const Ctx = struct {
             .spr = @splat(0),
             .reserve_addr = 0,
             .reserve_valid = false,
+            .depth = 0,
             .budget = 0,
             .mem = mem,
             .fault = .{},

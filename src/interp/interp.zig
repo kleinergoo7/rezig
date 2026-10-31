@@ -21,6 +21,12 @@ pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
 /// Runs `words` starting at `start`, resolving `bl` through `table`. Recursion
 /// mirrors the generated code's Zig call stack.
 pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: Table) Error!void {
+    if (ctx.depth >= ctx_mod.Ctx.max_call_depth) {
+        ctx.fault = .{ .kind = .unsupported, .addr = entry_addr };
+        return;
+    }
+    ctx.depth += 1;
+    defer ctx.depth -= 1;
     var steps: u32 = 0;
     var i: usize = 0;
     while (i < words.len) {
