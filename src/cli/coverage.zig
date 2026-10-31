@@ -10,7 +10,16 @@ const emit = @import("../codegen/emit.zig");
 
 pub const Options = parse.Analyze;
 
-pub const Missing = struct { name: []const u8, count: u64 };
+pub const Missing = struct {
+    name: []const u8,
+    bo: u5 = 0,
+    bi: u5 = 0,
+    /// 1 = link, 2 = absolute, 4 = branch through CTR.
+    flags: u8 = 0,
+    count: u64,
+    sample: u32,
+    addr: u32,
+};
 
 pub const Summary = struct {
     functions: usize,
@@ -25,7 +34,7 @@ pub const Summary = struct {
 
 /// Decoder gap grouped by primary opcode and its extension field, with one
 /// sample word so the encoding can be assembled directly.
-pub const Form = struct { primary: u6, xo: u16, count: u64, sample: u32 };
+pub const Form = struct { primary: u6, xo: u16, count: u64, sample: u32, sample_addr: u32 };
 
 /// Counts decoder and emitter coverage over already-discovered functions.
 /// The caller owns `summary.missing`.
@@ -41,7 +50,7 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
         .undecoded = &.{},
     };
 
-    var counts: std.StringHashMapUnmanaged(u64) = .empty;
+    var counts: std.AutoHashMapUnmanaged(u64, Missing) = .empty;
     defer counts.deinit(allocator);
     var forms: std.AutoHashMapUnmanaged(u32, Form) = .empty;
     defer forms.deinit(allocator);
@@ -62,6 +71,7 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
                         .xo = @truncate(key & 0xffff),
                         .count = 0,
                         .sample = word,
+                        .sample_addr = base + @as(u32, @intCast(i)) * 4,
                     };
                 }
                 entry.value_ptr.count += 1;
@@ -74,9 +84,20 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
                 summary.emitted += 1;
             } else {
                 complete = false;
-                const entry = try counts.getOrPut(allocator, @tagName(op));
-                if (!entry.found_existing) entry.value_ptr.* = 0;
-                entry.value_ptr.* += 1;
+                const entry = try counts.getOrPut(allocator, unsupportedKey(op));
+                if (!entry.found_existing) {
+                    const detail = branchDetail(op);
+                    entry.value_ptr.* = .{
+                        .name = @tagName(op),
+                        .bo = detail.bo,
+                        .bi = detail.bi,
+                        .flags = detail.flags,
+                        .count = 0,
+                        .sample = word,
+                        .addr = at,
+                    };
+                }
+                entry.value_ptr.count += 1;
             }
         }
         if (complete) summary.fully_emittable += 1;
@@ -86,7 +107,7 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
     errdefer list.deinit(allocator);
     var it = counts.iterator();
     while (it.next()) |entry| {
-        try list.append(allocator, .{ .name = entry.key_ptr.*, .count = entry.value_ptr.* });
+        try list.append(allocator, entry.value_ptr.*);
     }
     const items = try list.toOwnedSlice(allocator);
     std.mem.sort(Missing, items, {}, missingGreaterThan);
@@ -100,6 +121,36 @@ pub fn collect(allocator: std.mem.Allocator, functions: []const ppc_analyze.Func
     std.mem.sort(Form, form_items, {}, formGreaterThan);
     summary.undecoded = form_items;
     return summary;
+}
+
+const BranchDetail = struct { bo: u5 = 0, bi: u5 = 0, flags: u8 = 0 };
+
+fn branchDetail(op: decode.Instruction) BranchDetail {
+    return switch (op) {
+        .bc => |f| .{
+            .bo = f.bo,
+            .bi = f.bi,
+            .flags = @intFromBool(f.link) | (@as(u8, @intFromBool(f.absolute)) << 1),
+        },
+        .bclr => |f| .{
+            .bo = f.bo,
+            .bi = f.bi,
+            .flags = @intFromBool(f.link) |
+                (@as(u8, @intFromBool(f.absolute)) << 1) |
+                (@as(u8, @intFromBool(f.to_ctr)) << 2),
+        },
+        .bl => |f| .{ .flags = @as(u8, @intFromBool(f.absolute)) << 1 },
+        else => .{},
+    };
+}
+
+fn unsupportedKey(op: decode.Instruction) u64 {
+    const detail = branchDetail(op);
+    const tag: u16 = @backingInt(std.meta.activeTag(op));
+    return (@as(u64, tag) << 32) |
+        (@as(u64, detail.bo) << 24) |
+        (@as(u64, detail.bi) << 16) |
+        detail.flags;
 }
 
 /// Groups a rejected word by primary opcode and, where the ISA has one, its
@@ -122,7 +173,11 @@ fn formGreaterThan(_: void, a: Form, b: Form) bool {
 }
 
 fn missingGreaterThan(_: void, a: Missing, b: Missing) bool {
-    return a.count > b.count;
+    if (a.count != b.count) return a.count > b.count;
+    if (!std.mem.eql(u8, a.name, b.name)) return std.mem.lessThan(u8, a.name, b.name);
+    if (a.bo != b.bo) return a.bo < b.bo;
+    if (a.bi != b.bi) return a.bi < b.bi;
+    return a.flags < b.flags;
 }
 
 pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !void {
@@ -210,16 +265,30 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     });
 
     if (summary.missing.len != 0) {
-        try out.writeAll("unsupported opcodes:\n");
-        for (summary.missing[0..@min(summary.missing.len, 20)]) |entry| {
-            try out.print("  {s} {d}\n", .{ entry.name, entry.count });
+        try out.writeAll("unsupported forms (name, bo, bi, flags, count, sample, addr; flags: 1=link 2=absolute 4=ctr):\n");
+        for (summary.missing) |entry| {
+            try out.print("  {s} {d} {d} 0x{X} {d} 0x{X:0>8} 0x{X:0>8}\n", .{
+                entry.name,
+                entry.bo,
+                entry.bi,
+                entry.flags,
+                entry.count,
+                entry.sample,
+                entry.addr,
+            });
         }
     }
 
     if (summary.undecoded.len != 0) {
-        try out.writeAll("undecoded forms (primary, xo, count, sample):\n");
-        for (summary.undecoded[0..@min(summary.undecoded.len, 25)]) |form| {
-            try out.print("  {d:0>2} 0x{X:0>3} {d} 0x{X:0>8}\n", .{ form.primary, form.xo, form.count, form.sample });
+        try out.writeAll("undecoded forms (primary, xo, count, sample, addr):\n");
+        for (summary.undecoded) |form| {
+            try out.print("  {d:0>2} 0x{X:0>3} {d} 0x{X:0>8} 0x{X:0>8}\n", .{
+                form.primary,
+                form.xo,
+                form.count,
+                form.sample,
+                form.sample_addr,
+            });
         }
     }
     try out.flush();
@@ -261,4 +330,39 @@ test "collect separates emitted instructions from decoder gaps" {
     try testing.expectEqual(@as(usize, 1), summary.missing.len);
     try testing.expectEqualStrings("bc", summary.missing[0].name);
     try testing.expectEqual(@as(u64, 1), summary.missing[0].count);
+}
+
+test "collect keeps branch form details and sample addresses" {
+    // Two unsupported bc forms with different BO; one undecoded word.
+    var forms = [_]u32{ 0x42000003, 0x42200003, 0x00000000, 0x4e800020 };
+    var no_calls = [_]u32{};
+    const functions = [_]ppc_analyze.Function{
+        .{ .addr = 0x1000, .words = &forms, .calls = &no_calls },
+    };
+
+    const summary = try collect(testing.allocator, &functions);
+    defer testing.allocator.free(summary.missing);
+    defer testing.allocator.free(summary.undecoded);
+
+    try testing.expectEqual(@as(usize, 2), summary.missing.len);
+    var seen_16 = false;
+    var seen_17 = false;
+    for (summary.missing) |entry| {
+        try testing.expectEqualStrings("bc", entry.name);
+        try testing.expectEqual(@as(u64, 1), entry.count);
+        if (entry.bo == 16) {
+            seen_16 = true;
+            try testing.expectEqual(@as(u32, 0x42000003), entry.sample);
+            try testing.expectEqual(@as(u32, 0x1000), entry.addr);
+        } else if (entry.bo == 17) {
+            seen_17 = true;
+            try testing.expectEqual(@as(u32, 0x42200003), entry.sample);
+            try testing.expectEqual(@as(u32, 0x1004), entry.addr);
+        }
+    }
+    try testing.expect(seen_16);
+    try testing.expect(seen_17);
+
+    try testing.expectEqual(@as(usize, 1), summary.undecoded.len);
+    try testing.expectEqual(@as(u32, 0x1008), summary.undecoded[0].sample_addr);
 }
