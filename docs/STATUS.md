@@ -108,6 +108,7 @@ ClassiCube, ELF32 PowerPC:
 - 3,242 FDE starts from `.eh_frame_hdr`; coverage: 8,011 functions, 176,993 unique
   instructions = 91.98% of `.text`. R1 closed decode and emit to 100.00%.
 - `zig build gate -Delf=<file> -Dslice=50` passes 50 x 64 cases.
+- 500-function gates pass: Better16 31,872 cases, ClassiCube 32,000 cases.
 
 ## R1 codegen completeness (2026-10-31)
 
@@ -126,6 +127,10 @@ ClassiCube:
 - 8,011 functions, 612,011 instruction instances.
 - decode 100.00%, emit 100.00%, fully emittable 8,011 (100.00%).
 - `codegen --all`: 8,011 functions in 9 chunks, 84 MB, about 3s.
+
+Differential fixes found by the 500-function gate: `rlwinm`/`rlwimi`/`rlwnm`
+masks now number bits from the MSB, and straight-line functions consume one
+budget unit per instruction like the interpreter.
 
 Discovery now drops `.pdata` seeds whose first word is not an instruction.
 Reserved primary 0/5 words, unlisted VMX encodings and a few reserved POWER

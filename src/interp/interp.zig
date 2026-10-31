@@ -624,7 +624,8 @@ fn mask32(mb: u5, me: u5) u32 {
     var mask: u32 = 0;
     var bit: u6 = 0;
     while (bit < 32) : (bit += 1) {
-        const in_range = if (mb <= me) bit >= mb and bit <= me else bit >= mb or bit <= me;
+        const ppc_bit: u6 = 31 - bit;
+        const in_range = if (mb <= me) ppc_bit >= mb and ppc_bit <= me else ppc_bit >= mb or ppc_bit <= me;
         if (in_range) mask |= @as(u32, 1) << @intCast(bit);
     }
     return mask;

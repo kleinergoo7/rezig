@@ -284,21 +284,12 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
     const end = base +% @as(u32, @intCast(words.len)) * 4;
 
     var has_branch = false;
-    var touches_ctx = false;
     for (words, 0..) |word, i| {
         const at = base + @as(u32, @intCast(i)) * 4;
         const op = ppc.decode.decode(word) catch return error.UnsupportedOpcode;
         switch (op) {
-            .b => {
-                has_branch = true;
-                touches_ctx = true;
-            },
-            .blr, .nop => {},
-            .bc, .bclr, .rfid => {
-                has_branch = true;
-                touches_ctx = true;
-            },
-            else => touches_ctx = true,
+            .b, .bc, .bclr, .rfid => has_branch = true,
+            else => {},
         }
         if (!supportsAt(op, at, base, end)) return error.UnsupportedOpcode;
     }
@@ -307,12 +298,12 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
     try out.print(allocator, "pub fn {s}(ctx: *Ctx) callconv(.c) void {{\n", .{
         abi.fnName(opts.addr, &name_buf),
     });
-    if (!touches_ctx) try out.appendSlice(allocator, "    _ = ctx;\n");
 
     if (!has_branch) {
         for (words, 0..) |word, i| {
             const addr = base + @as(u32, @intCast(i)) * 4;
             try out.print(allocator, "    // 0x{X:0>8}\n", .{addr});
+            try out.appendSlice(allocator, "    if (ctx.budget != 0) {\n        ctx.budget -= 1;\n        if (ctx.budget == 0) return;\n    }\n");
             const op = ppc.decode.decode(word) catch return error.UnsupportedOpcode;
             if (op == .blr) {
                 try out.appendSlice(allocator, "    return;\n");
@@ -1228,7 +1219,8 @@ fn mask32(mb: u5, me: u5) u32 {
     var mask: u32 = 0;
     var bit: u6 = 0;
     while (bit < 32) : (bit += 1) {
-        const in_range = if (mb <= me) bit >= mb and bit <= me else bit >= mb or bit <= me;
+        const ppc_bit: u6 = 31 - bit;
+        const in_range = if (mb <= me) ppc_bit >= mb and ppc_bit <= me else ppc_bit >= mb or ppc_bit <= me;
         if (in_range) mask |= @as(u32, 1) << @intCast(bit);
     }
     return mask;
@@ -1244,10 +1236,22 @@ test "golden function" {
     try testing.expectEqualStrings(
         \\pub fn g_00000100(ctx: *Ctx) callconv(.c) void {
         \\    // 0x00000100
+        \\    if (ctx.budget != 0) {
+        \\        ctx.budget -= 1;
+        \\        if (ctx.budget == 0) return;
+        \\    }
         \\    ctx.gpr[3] = 0x0000000000000001;
         \\    // 0x00000104
+        \\    if (ctx.budget != 0) {
+        \\        ctx.budget -= 1;
+        \\        if (ctx.budget == 0) return;
+        \\    }
         \\    ctx.store32(@as(u32, @truncate(ctx.gpr[11])) +% 0x00000014, ctx.gpr[10]);
         \\    // 0x00000108
+        \\    if (ctx.budget != 0) {
+        \\        ctx.budget -= 1;
+        \\        if (ctx.budget == 0) return;
+        \\    }
         \\    return;
         \\}
         \\
@@ -1375,6 +1379,13 @@ test "record forms update CR0" {
     const rot_text = try function(testing.allocator, &rot, .{ .addr = 0x100 });
     defer testing.allocator.free(rot_text);
     try testing.expect(std.mem.indexOf(u8, rot_text, "ctx.setCr32(0, ctx.gpr[3], 0, true);") != null);
+}
+
+test "rlwinm masks in PPC bit order" {
+    const words = [_]u32{ 0x54a0e13f, 0x4e800020 }; // rlwinm. r0,r5,28,4,31
+    const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "& 0x0FFFFFFF") != null);
 }
 
 test "shift lowers into the RA destination" {
