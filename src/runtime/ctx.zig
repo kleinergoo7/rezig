@@ -3,7 +3,7 @@
 const std = @import("std");
 const memory = @import("memory.zig");
 
-pub const FaultKind = enum { none, load, store, fetch, unsupported };
+pub const FaultKind = enum { none, load, store, fetch, unsupported, trap };
 
 pub const Fault = struct {
     kind: FaultKind = .none,
@@ -19,6 +19,10 @@ pub const Ctx = struct {
     xer: u32,
     lr: u32,
     ctr: u32,
+    msr: u64,
+    spr: [1024]u64,
+    reserve_addr: u32,
+    reserve_valid: bool,
     /// Instruction budget for generated code. `0` means unlimited.
     budget: u32,
     mem: memory.Memory,
@@ -33,6 +37,10 @@ pub const Ctx = struct {
             .xer = 0,
             .lr = 0,
             .ctr = 0,
+            .msr = 0,
+            .spr = @splat(0),
+            .reserve_addr = 0,
+            .reserve_valid = false,
             .budget = 0,
             .mem = mem,
             .fault = .{},
@@ -73,6 +81,231 @@ pub const Ctx = struct {
 
     pub fn store64(self: *Ctx, addr: u32, value: u64) void {
         self.store(u64, addr, value, .store);
+    }
+
+    pub fn load16br(self: *Ctx, addr: u32) u64 {
+        return @byteSwap(@as(u16, @truncate(self.load16(addr))));
+    }
+
+    pub fn load32br(self: *Ctx, addr: u32) u64 {
+        return @byteSwap(@as(u32, @truncate(self.load32(addr))));
+    }
+
+    pub fn store16br(self: *Ctx, addr: u32, value: u64) void {
+        self.store16(addr, @byteSwap(@as(u16, @truncate(value))));
+    }
+
+    pub fn store32br(self: *Ctx, addr: u32, value: u64) void {
+        self.store32(addr, @byteSwap(@as(u32, @truncate(value))));
+    }
+
+    /// XER carry bit, PPC bit 29.
+    const xer_ca_mask: u32 = 1 << 2;
+
+    pub fn ca(self: *const Ctx) bool {
+        return self.xer & xer_ca_mask != 0;
+    }
+
+    fn setCa(self: *Ctx, value: bool) void {
+        if (value) {
+            self.xer |= xer_ca_mask;
+        } else {
+            self.xer &= ~xer_ca_mask;
+        }
+    }
+
+    pub fn addic(self: *Ctx, a: u64, imm: i16) u64 {
+        const b: u64 = @bitCast(@as(i64, imm));
+        const result, const carry = @addWithOverflow(a, b);
+        self.setCa(carry != 0);
+        return result;
+    }
+
+    pub fn addc(self: *Ctx, a: u64, b: u64) u64 {
+        const result, const carry = @addWithOverflow(a, b);
+        self.setCa(carry != 0);
+        return result;
+    }
+
+    pub fn adde(self: *Ctx, a: u64, b: u64) u64 {
+        const carry: u64 = @intFromBool(self.ca());
+        const sum, const carry1 = @addWithOverflow(a, b);
+        const result, const carry2 = @addWithOverflow(sum, carry);
+        self.setCa(carry1 != 0 or carry2 != 0);
+        return result;
+    }
+
+    pub fn addze(self: *Ctx, a: u64) u64 {
+        const carry: u64 = @intFromBool(self.ca());
+        const result, const overflow = @addWithOverflow(a, carry);
+        self.setCa(overflow != 0);
+        return result;
+    }
+
+    pub fn subfc(self: *Ctx, a: u64, b: u64) u64 {
+        const sum, const carry1 = @addWithOverflow(~a, b);
+        const result, const carry2 = @addWithOverflow(sum, 1);
+        self.setCa(carry1 != 0 or carry2 != 0);
+        return result;
+    }
+
+    pub fn subfe(self: *Ctx, a: u64, b: u64) u64 {
+        const carry: u64 = @intFromBool(self.ca());
+        const sum, const carry1 = @addWithOverflow(~a, b);
+        const result, const carry2 = @addWithOverflow(sum, carry);
+        self.setCa(carry1 != 0 or carry2 != 0);
+        return result;
+    }
+
+    pub fn subfze(self: *Ctx, a: u64) u64 {
+        const carry: u64 = @intFromBool(self.ca());
+        const sum, const carry1 = @addWithOverflow(~a, 0);
+        const result, const carry2 = @addWithOverflow(sum, carry);
+        self.setCa(carry1 != 0 or carry2 != 0);
+        return result;
+    }
+
+    pub fn subfme(self: *Ctx, a: u64) u64 {
+        const carry: u64 = @intFromBool(self.ca());
+        const sum, const carry1 = @addWithOverflow(~a, 0);
+        const minus_one, const carry2 = @addWithOverflow(sum, carry);
+        const result, const carry3 = @addWithOverflow(minus_one, std.math.maxInt(u64));
+        self.setCa(carry1 != 0 or carry2 != 0 or carry3 != 0);
+        return result;
+    }
+
+    pub fn neg(self: *Ctx, a: u64) u64 {
+        const result, const borrow = @subWithOverflow(@as(u64, 0), a);
+        self.setCa(borrow != 0);
+        return result;
+    }
+
+    pub fn mulhw(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        const x: i32 = @truncate(@as(i64, @bitCast(a)));
+        const y: i32 = @truncate(@as(i64, @bitCast(b)));
+        const product: i64 = @as(i64, x) * @as(i64, y);
+        return @as(u32, @bitCast(@as(i32, @truncate(product >> 32))));
+    }
+
+    pub fn mulhwu(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        const x: u32 = @truncate(a);
+        const y: u32 = @truncate(b);
+        return (@as(u64, x) * @as(u64, y)) >> 32;
+    }
+
+    pub fn mulld(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        return a *% b;
+    }
+
+    pub fn divw(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        const x: i32 = @truncate(@as(i64, @bitCast(a)));
+        const y: i32 = @truncate(@as(i64, @bitCast(b)));
+        if (y == 0) return 0;
+        if (x == std.math.minInt(i32) and y == -1) return @as(u32, @bitCast(x));
+        return @as(u32, @bitCast(@divTrunc(x, y)));
+    }
+
+    pub fn divwu(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        const x: u32 = @truncate(a);
+        const y: u32 = @truncate(b);
+        return if (y == 0) 0 else x / y;
+    }
+
+    pub fn slw(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        return @as(u32, @truncate(a)) << @intCast(b & 31);
+    }
+
+    pub fn srw(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        return @as(u32, @truncate(a)) >> @intCast(b & 31);
+    }
+
+    pub fn sld(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        return a << @intCast(b & 63);
+    }
+
+    pub fn srd(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        return a >> @intCast(b & 63);
+    }
+
+    pub fn sradi(self: *const Ctx, a: u64, sh: u5) u64 {
+        _ = self;
+        const x: i64 = @bitCast(a);
+        return @bitCast(x >> @intCast(sh));
+    }
+
+    pub fn trapIf(self: *Ctx, to: u5, a: u64, b: u64, addr: u32) void {
+        const x: i64 = @bitCast(a);
+        const y: i64 = @bitCast(b);
+        const lt = to & 0x10 != 0 and x < y;
+        const gt = to & 0x08 != 0 and x > y;
+        const eq = to & 0x04 != 0 and x == y;
+        const ltu = to & 0x02 != 0 and a < b;
+        const gtu = to & 0x01 != 0 and a > b;
+        if (lt or gt or eq or ltu or gtu) self.trap(addr);
+    }
+
+    pub fn getSpr(self: *const Ctx, spr: u10) u64 {
+        return switch (spr) {
+            8 => self.lr,
+            9 => self.ctr,
+            1 => self.xer,
+            else => self.spr[spr],
+        };
+    }
+
+    pub fn setSpr(self: *Ctx, spr: u10, value: u64) void {
+        switch (spr) {
+            8 => self.lr = @truncate(value),
+            9 => self.ctr = @truncate(value),
+            1 => self.xer = @truncate(value),
+            else => self.spr[spr] = value,
+        }
+    }
+
+    pub fn moveToCrf(self: *Ctx, crm: u8, value: u64) void {
+        for (0..8) |i| {
+            if (crm & (@as(u8, 0x80) >> @intCast(i)) == 0) continue;
+            const shift: u5 = @intCast((7 - i) * 4);
+            const field: u32 = @truncate(value >> shift);
+            self.writeCrField(@intCast(i), field & 0xf);
+        }
+    }
+
+    pub fn moveFromCrf(self: *const Ctx, crm: u8) u64 {
+        var value: u64 = 0;
+        for (0..8) |i| {
+            if (crm & (@as(u8, 0x80) >> @intCast(i)) == 0) continue;
+            const shift: u5 = @intCast((7 - i) * 4);
+            const field: u32 = (self.cr >> shift) & 0xf;
+            value |= @as(u64, field) << shift;
+        }
+        return value;
+    }
+
+    pub fn lwarx(self: *Ctx, addr: u32) u64 {
+        self.reserve_addr = addr;
+        self.reserve_valid = true;
+        return self.load32(addr);
+    }
+
+    pub fn stwcx(self: *Ctx, addr: u32, value: u64) void {
+        const success = self.reserve_valid and self.reserve_addr == addr;
+        if (success) self.store32(addr, value);
+        self.setCr(0, @intFromBool(!success), 0, true);
+        self.reserve_valid = false;
+    }
+
+    pub fn trap(self: *Ctx, addr: u32) void {
+        self.fault = .{ .kind = .trap, .addr = addr };
     }
 
     /// Sets one 4-bit CR field from an integer compare (LT, GT, EQ, SO=0).
@@ -329,6 +562,90 @@ const testing = std.testing;
 
 fn testCtx(buf: []u8) Ctx {
     return Ctx.init(.{ .base = 0x1000, .data = buf });
+}
+
+test "carry arithmetic matches ppc" {
+    var buf: [64]u8 = @splat(0);
+    var ctx = testCtx(&buf);
+
+    try std.testing.expectEqual(@as(u64, 0), ctx.addic(std.math.maxInt(u64), 1));
+    try std.testing.expect(ctx.ca());
+    try std.testing.expectEqual(@as(u64, 0), ctx.addc(std.math.maxInt(u64), 1));
+    try std.testing.expect(ctx.ca());
+    try std.testing.expectEqual(@as(u64, 0), ctx.adde(std.math.maxInt(u64), 0));
+    try std.testing.expect(ctx.ca());
+    try std.testing.expectEqual(@as(u64, 0), ctx.addze(std.math.maxInt(u64)));
+    try std.testing.expect(ctx.ca());
+    try std.testing.expectEqual(@as(u64, 0), ctx.subfc(0, 0));
+    try std.testing.expect(ctx.ca());
+    try std.testing.expectEqual(@as(u64, 0), ctx.subfe(0, 0));
+    try std.testing.expect(ctx.ca());
+    try std.testing.expectEqual(@as(u64, 0), ctx.subfze(0));
+    try std.testing.expect(ctx.ca());
+    try std.testing.expectEqual(std.math.maxInt(u64), ctx.neg(1));
+    try std.testing.expect(ctx.ca());
+}
+
+test "multiply, divide and shift helpers" {
+    var buf: [64]u8 = @splat(0);
+    const ctx = testCtx(&buf);
+
+    try std.testing.expectEqual(@as(u64, 0x40000000), ctx.mulhw(0x80000000, 0x80000000));
+    try std.testing.expectEqual(@as(u64, 0xFFFFFFFE), ctx.mulhwu(0xFFFFFFFF, 0xFFFFFFFF));
+    try std.testing.expectEqual(@as(u64, 12), ctx.mulld(3, 4));
+    try std.testing.expectEqual(@as(u64, 0xFFFFFFFD), ctx.divw(0xFFFFFFFFFFFFFFF9, 2));
+    try std.testing.expectEqual(@as(u64, 0x7FFFFFFF), ctx.divwu(0xFFFFFFFF, 2));
+    try std.testing.expectEqual(@as(u64, 2), ctx.slw(1, 33));
+    try std.testing.expectEqual(@as(u64, 1), ctx.srw(0x80000000, 31));
+    try std.testing.expectEqual(@as(u64, 2), ctx.sld(1, 65));
+    try std.testing.expectEqual(@as(u64, 1), ctx.srd(0x8000000000000000, 63));
+    try std.testing.expectEqual(@as(u64, 0xFFFFFFFF00000000), ctx.sradi(0x8000000000000000, 31));
+}
+
+test "trapIf only traps on the selected condition" {
+    var buf: [64]u8 = @splat(0);
+    var ctx = testCtx(&buf);
+
+    ctx.trapIf(0x04, 5, 5, 0x1000);
+    try std.testing.expectEqual(FaultKind.trap, ctx.fault.kind);
+    ctx.resetFault();
+    ctx.trapIf(0x04, 5, 6, 0x1000);
+    try std.testing.expectEqual(FaultKind.none, ctx.fault.kind);
+}
+
+test "lwarx and stwcx reserve one word" {
+    var buf: [64]u8 = @splat(0);
+    var ctx = testCtx(&buf);
+
+    try std.testing.expectEqual(@as(u64, 0), ctx.lwarx(0x1000));
+    ctx.stwcx(0x1000, 0x12345678);
+    try std.testing.expectEqual(@as(u64, 0x12345678), ctx.load32(0x1000));
+    try std.testing.expectEqual(@as(u1, 1), ctx.crBit(2));
+
+    ctx.stwcx(0x1000, 1);
+    try std.testing.expectEqual(@as(u1, 0), ctx.crBit(2));
+}
+
+test "ocrf moves only the selected fields" {
+    var buf: [64]u8 = @splat(0);
+    var ctx = testCtx(&buf);
+
+    ctx.moveToCrf(0x80, 0x12345678);
+    try std.testing.expectEqual(@as(u32, 0x10000000), ctx.cr);
+    try std.testing.expectEqual(@as(u64, 0x10000000), ctx.moveFromCrf(0x80));
+    try std.testing.expectEqual(@as(u64, 0), ctx.moveFromCrf(0x40));
+}
+
+test "spr moves route lr and ctr" {
+    var buf: [64]u8 = @splat(0);
+    var ctx = testCtx(&buf);
+
+    ctx.setSpr(1023, 7);
+    try std.testing.expectEqual(@as(u64, 7), ctx.getSpr(1023));
+    ctx.setSpr(8, 0x1234);
+    try std.testing.expectEqual(@as(u32, 0x1234), ctx.lr);
+    ctx.setSpr(9, 0x5678);
+    try std.testing.expectEqual(@as(u32, 0x5678), ctx.ctr);
 }
 
 test "store32 writes big endian and load32 reads it" {

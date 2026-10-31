@@ -263,6 +263,134 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .vspltisw => |f| ctx.vmx[f.vd] = ctx.vspltisw(f.simm),
             .cmpwi => |f| ctx.setCr32(f.crf, ctx.gpr[f.ra], @bitCast(@as(i64, f.imm)), true),
             .cmplwi => |f| ctx.setCr32(f.crf, ctx.gpr[f.ra], @as(u64, f.imm), false),
+            .addic => |f| {
+                ctx.gpr[f.rt] = ctx.addic(base(ctx, f.ra), f.imm);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .addc => |f| {
+                ctx.gpr[f.rt] = ctx.addc(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .adde => |f| {
+                ctx.gpr[f.rt] = ctx.adde(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .addze => |f| {
+                ctx.gpr[f.ra] = ctx.addze(ctx.gpr[f.ra]);
+                recordCr(ctx, f.rc, false, f.ra);
+            },
+            .subfc => |f| {
+                ctx.gpr[f.rt] = ctx.subfc(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .subfe => |f| {
+                ctx.gpr[f.rt] = ctx.subfe(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .subfme => |f| {
+                ctx.gpr[f.rt] = ctx.subfme(ctx.gpr[f.ra]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .subfze => |f| {
+                ctx.gpr[f.rt] = ctx.subfze(ctx.gpr[f.ra]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .neg => |f| {
+                ctx.gpr[f.rt] = ctx.neg(ctx.gpr[f.ra]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .mulhw => |f| {
+                ctx.gpr[f.rt] = ctx.mulhw(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .mulhwu => |f| {
+                ctx.gpr[f.rt] = ctx.mulhwu(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .mulld => |f| {
+                ctx.gpr[f.rt] = ctx.mulld(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .divw => |f| {
+                ctx.gpr[f.rt] = ctx.divw(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .divwu => |f| {
+                ctx.gpr[f.rt] = ctx.divwu(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .slw => |f| ctx.gpr[f.ra] = ctx.slw(ctx.gpr[f.rt], ctx.gpr[f.rb]),
+            .srw => |f| ctx.gpr[f.ra] = ctx.srw(ctx.gpr[f.rt], ctx.gpr[f.rb]),
+            .sld => |f| ctx.gpr[f.ra] = ctx.sld(ctx.gpr[f.rt], ctx.gpr[f.rb]),
+            .srd => |f| ctx.gpr[f.ra] = ctx.srd(ctx.gpr[f.rt], ctx.gpr[f.rb]),
+            .sradi => |f| {
+                ctx.gpr[f.ra] = ctx.sradi(ctx.gpr[f.rs], f.sh);
+                recordCr(ctx, f.rc, false, f.ra);
+            },
+            .xor_ => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] ^ ctx.gpr[f.rb],
+            .andc => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] & ~ctx.gpr[f.rb],
+            .eqv => |f| ctx.gpr[f.ra] = ~(ctx.gpr[f.rt] ^ ctx.gpr[f.rb]),
+            .nor_ => |f| ctx.gpr[f.ra] = ~(ctx.gpr[f.rt] | ctx.gpr[f.rb]),
+            .cmpd => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], ctx.gpr[f.rb], true),
+            .cmpld => |f| ctx.setCr(f.crf, ctx.gpr[f.ra], ctx.gpr[f.rb], false),
+            .twi => |f| ctx.trapIf(f.to, ctx.gpr[f.ra], @bitCast(@as(i64, f.imm)), cur),
+            .tw => |f| ctx.trapIf(f.to, ctx.gpr[f.ra], ctx.gpr[f.rb], cur),
+            .mfspr => |f| ctx.gpr[f.rt] = ctx.getSpr(f.spr),
+            .mtspr => |f| ctx.setSpr(f.spr, ctx.gpr[f.rt]),
+            .mfmsr => |f| ctx.gpr[f.rt] = ctx.msr,
+            .mtmsr => |f| ctx.msr = ctx.gpr[f.rt],
+            .mtmsrd => |f| ctx.msr = ctx.gpr[f.rt],
+            .mtocrf => |f| ctx.moveToCrf(f.crm, ctx.gpr[f.rt]),
+            .mfocrf => |f| ctx.gpr[f.rt] = ctx.moveFromCrf(f.crm),
+            .lwsync, .sync, .isync, .eieio, .dcbt, .dcbf, .dcbst, .dcbz, .icbi => {},
+            .lwarx => |f| ctx.gpr[f.rt] = ctx.lwarx(vaddr(ctx, f.ra, f.rb)),
+            .stwcx => |f| ctx.stwcx(vaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
+            .lhzu => |f| {
+                if (f.ra == 0 or f.ra == f.rt) return error.InvalidUpdate;
+                const at = addr(ctx, f.ra, f.imm);
+                ctx.gpr[f.rt] = ctx.load16(at);
+                ctx.gpr[f.ra] = at;
+            },
+            .lha => |f| {
+                const w = ctx.load16(addr(ctx, f.ra, f.imm));
+                ctx.gpr[f.rt] = @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(w))))));
+            },
+            .lhau => |f| {
+                if (f.ra == 0 or f.ra == f.rt) return error.InvalidUpdate;
+                const at = addr(ctx, f.ra, f.imm);
+                const w = ctx.load16(at);
+                ctx.gpr[f.rt] = @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(w))))));
+                ctx.gpr[f.ra] = at;
+            },
+            .stbu => |f| ctx.store8(addr(ctx, f.ra, f.imm), ctx.gpr[f.rt]),
+            .sthu => |f| ctx.store16(addr(ctx, f.ra, f.imm), ctx.gpr[f.rt]),
+            .sthx => |f| ctx.store16(vaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
+            .ldx => |f| ctx.gpr[f.rt] = ctx.load64(vaddr(ctx, f.ra, f.rb)),
+            .stdx => |f| ctx.store64(vaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
+            .lwzux => |f| {
+                if (f.ra == 0 or f.ra == f.rt) return error.InvalidUpdate;
+                const at = vaddr(ctx, f.ra, f.rb);
+                ctx.gpr[f.rt] = ctx.load32(at);
+                ctx.gpr[f.ra] = at;
+            },
+            .stwux => |f| {
+                if (f.ra == 0) return error.InvalidUpdate;
+                const at = vaddr(ctx, f.ra, f.rb);
+                ctx.store32(at, ctx.gpr[f.rt]);
+                ctx.gpr[f.ra] = at;
+            },
+            .lbzux => |f| {
+                if (f.ra == 0 or f.ra == f.rt) return error.InvalidUpdate;
+                const at = vaddr(ctx, f.ra, f.rb);
+                ctx.gpr[f.rt] = ctx.load8(at);
+                ctx.gpr[f.ra] = at;
+            },
+            .lwbrx => |f| ctx.gpr[f.rt] = ctx.load32br(vaddr(ctx, f.ra, f.rb)),
+            .lhbrx => |f| ctx.gpr[f.rt] = ctx.load16br(vaddr(ctx, f.ra, f.rb)),
+            .stwbrx => |f| ctx.store32br(vaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
+            .sthbrx => |f| ctx.store16br(vaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
+            .xoris => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] ^ (@as(u64, f.imm) << 16),
+            else => return error.Unsupported,
         }
         i += 1;
     }
@@ -349,6 +477,17 @@ test "arithmetic and rotate match the emitter shapes" {
     try testing.expectEqual(@as(u64, 1), ctx.gpr[3]);
     try testing.expectEqual(@as(u64, 3), ctx.gpr[4]);
     try testing.expectEqual(@as(u64, 0x10000), ctx.gpr[5]);
+    try testing.expectEqual(@as(u64, 1), ctx.gpr[6]);
+}
+
+test "addic carry feeds subfe" {
+    var buf: [16]u8 = @splat(0);
+    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    ctx.gpr[3] = 0xffffffffffffffff;
+    ctx.gpr[4] = 0;
+    ctx.gpr[5] = 1;
+    try runWords(&ctx, &.{ 0x30630001, 0x7cc42910, 0x4e800020 }); // addic r3,r3,1; subfe r6,r4,r5
+    try testing.expectEqual(@as(u64, 0), ctx.gpr[3]);
     try testing.expectEqual(@as(u64, 1), ctx.gpr[6]);
 }
 
