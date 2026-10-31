@@ -246,6 +246,39 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             .fdivs => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) / @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fmadds => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) * @as(f32, @floatCast(ctx.fpr[f.frc])) + @as(f32, @floatCast(ctx.fpr[f.frb]))),
             .fctiwz => |f| ctx.fpr[f.frd] = ctx.fctiwz(ctx.fpr[f.frb]),
+            .fctidz => |f| ctx.fpr[f.frd] = ctx.fctidz(ctx.fpr[f.frb]),
+            .fabs => |f| ctx.fpr[f.frd] = @abs(ctx.fpr[f.frb]),
+            .fsqrts => |f| ctx.fpr[f.frd] = @floatCast(@sqrt(@as(f32, @floatCast(ctx.fpr[f.frb])))),
+            .fmsubs => |f| ctx.fpr[f.frd] = @floatCast(@as(f32, @floatCast(ctx.fpr[f.fra])) * @as(f32, @floatCast(ctx.fpr[f.frc])) - @as(f32, @floatCast(ctx.fpr[f.frb]))),
+            .fnmsubs => |f| ctx.fpr[f.frd] = @floatCast(-(@as(f32, @floatCast(ctx.fpr[f.fra])) * @as(f32, @floatCast(ctx.fpr[f.frc])) - @as(f32, @floatCast(ctx.fpr[f.frb])))),
+            .fnmadds => |f| ctx.fpr[f.frd] = @floatCast(-(@as(f32, @floatCast(ctx.fpr[f.fra])) * @as(f32, @floatCast(ctx.fpr[f.frc])) + @as(f32, @floatCast(ctx.fpr[f.frb])))),
+            .fmadd => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] * ctx.fpr[f.frc] + ctx.fpr[f.frb],
+            .fmsub => |f| ctx.fpr[f.frd] = ctx.fpr[f.fra] * ctx.fpr[f.frc] - ctx.fpr[f.frb],
+            .fnmsub => |f| ctx.fpr[f.frd] = -(ctx.fpr[f.fra] * ctx.fpr[f.frc] - ctx.fpr[f.frb]),
+            .fnmadd => |f| ctx.fpr[f.frd] = -(ctx.fpr[f.fra] * ctx.fpr[f.frc] + ctx.fpr[f.frb]),
+            .lfsu => |f| {
+                const at = addr(ctx, f.ra, f.imm);
+                ctx.fpr[f.frd] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(at))))));
+                ctx.gpr[f.ra] = at;
+            },
+            .stfsu => |f| {
+                const at = addr(ctx, f.ra, f.imm);
+                ctx.store32(at, @as(u32, @bitCast(@as(f32, @floatCast(ctx.fpr[f.frd])))));
+                ctx.gpr[f.ra] = at;
+            },
+            .lfdu => |f| {
+                const at = addr(ctx, f.ra, f.imm);
+                ctx.fpr[f.frd] = @bitCast(ctx.load64(at));
+                ctx.gpr[f.ra] = at;
+            },
+            .stfdu => |f| {
+                const at = addr(ctx, f.ra, f.imm);
+                ctx.store64(at, @bitCast(ctx.fpr[f.frd]));
+                ctx.gpr[f.ra] = at;
+            },
+            .lfdx => |f| ctx.fpr[f.frd] = @bitCast(ctx.load64(vaddr(ctx, f.fra, f.frb))),
+            .stfsx => |f| ctx.store32(vaddr(ctx, f.fra, f.frb), @as(u32, @bitCast(@as(f32, @floatCast(ctx.fpr[f.frd]))))),
+            .stfdx => |f| ctx.store64(vaddr(ctx, f.fra, f.frb), @bitCast(ctx.fpr[f.frd])),
             .lfd => |f| ctx.fpr[f.frd] = @bitCast(ctx.load64(addr(ctx, f.ra, f.imm))),
             .stfd => |f| ctx.store64(addr(ctx, f.ra, f.imm), @bitCast(ctx.fpr[f.frd])),
             .lvx => |f| ctx.vmx[f.vd] = ctx.loadVmx(vaddr(ctx, f.ra, f.rb)),
@@ -319,6 +352,14 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 ctx.gpr[f.rt] = ctx.divwu(ctx.gpr[f.ra], ctx.gpr[f.rb]);
                 recordCr(ctx, f.rc, false, f.rt);
             },
+            .divdu => |f| {
+                ctx.gpr[f.rt] = ctx.divdu(ctx.gpr[f.ra], ctx.gpr[f.rb]);
+                recordCr(ctx, f.rc, false, f.rt);
+            },
+            .rlwnm => |f| {
+                ctx.gpr[f.ra] = std.math.rotl(u32, @truncate(ctx.gpr[f.rs]), @as(u5, @truncate(ctx.gpr[f.rb]))) & mask32(f.mb, f.me);
+                recordCr(ctx, f.rc, true, f.ra);
+            },
             .slw => |f| ctx.gpr[f.ra] = ctx.slw(ctx.gpr[f.rt], ctx.gpr[f.rb]),
             .srw => |f| ctx.gpr[f.ra] = ctx.srw(ctx.gpr[f.rt], ctx.gpr[f.rb]),
             .sld => |f| ctx.gpr[f.ra] = ctx.sld(ctx.gpr[f.rt], ctx.gpr[f.rb]),
@@ -379,6 +420,12 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 ctx.store32(at, ctx.gpr[f.rt]);
                 ctx.gpr[f.ra] = at;
             },
+            .stbux => |f| {
+                if (f.ra == 0) return error.InvalidUpdate;
+                const at = vaddr(ctx, f.ra, f.rb);
+                ctx.store8(at, ctx.gpr[f.rt]);
+                ctx.gpr[f.ra] = at;
+            },
             .lbzux => |f| {
                 if (f.ra == 0 or f.ra == f.rt) return error.InvalidUpdate;
                 const at = vaddr(ctx, f.ra, f.rb);
@@ -387,10 +434,50 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
             },
             .lwbrx => |f| ctx.gpr[f.rt] = ctx.load32br(vaddr(ctx, f.ra, f.rb)),
             .lhbrx => |f| ctx.gpr[f.rt] = ctx.load16br(vaddr(ctx, f.ra, f.rb)),
+            .lhax => |f| {
+                const w = ctx.load16(vaddr(ctx, f.ra, f.rb));
+                ctx.gpr[f.rt] = @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(w))))));
+            },
+            .lhaux => |f| {
+                if (f.ra == 0 or f.ra == f.rt) return error.InvalidUpdate;
+                const at = vaddr(ctx, f.ra, f.rb);
+                const w = ctx.load16(at);
+                ctx.gpr[f.rt] = @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(w))))));
+                ctx.gpr[f.ra] = at;
+            },
             .stwbrx => |f| ctx.store32br(vaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
             .sthbrx => |f| ctx.store16br(vaddr(ctx, f.ra, f.rb), ctx.gpr[f.rt]),
             .xoris => |f| ctx.gpr[f.ra] = ctx.gpr[f.rt] ^ (@as(u64, f.imm) << 16),
-            else => return error.Unsupported,
+            .andis_dot => |f| {
+                ctx.gpr[f.ra] = ctx.gpr[f.rt] & (@as(u64, f.imm) << 16);
+                ctx.setCr(0, ctx.gpr[f.ra], 0, true);
+            },
+            .cr_op => |f| {
+                const a = ctx.crBit(f.ba);
+                const b = ctx.crBit(f.bb);
+                const value: u1 = switch (f.kind) {
+                    .crand => a & b,
+                    .crandc => a & ~b,
+                    .creqv => ~(a ^ b),
+                    .crnand => ~(a & b),
+                    .crnor => ~(a | b),
+                    .cror => a | b,
+                    .crorc => a | ~b,
+                    .crxor => a ^ b,
+                };
+                ctx.setCrBit(f.bt, value);
+            },
+            .mcrf => |f| ctx.setCrField(f.crf_d, ctx.crField(f.crf_s)),
+            .rfid => {
+                ctx.msr = ctx.getSpr(27);
+                const target: u32 = @truncate(ctx.getSpr(26));
+                const end = entry_addr +% @as(u32, @intCast(words.len)) * 4;
+                if (target >= entry_addr and target < end) {
+                    i = @intCast((target - entry_addr) / 4);
+                    continue;
+                }
+                return;
+            },
         }
         i += 1;
     }
@@ -478,6 +565,23 @@ test "arithmetic and rotate match the emitter shapes" {
     try testing.expectEqual(@as(u64, 3), ctx.gpr[4]);
     try testing.expectEqual(@as(u64, 0x10000), ctx.gpr[5]);
     try testing.expectEqual(@as(u64, 1), ctx.gpr[6]);
+}
+
+test "fmul and fmadd read the right operands" {
+    var buf: [16]u8 = @splat(0);
+
+    var mul = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    mul.fpr[1] = 3;
+    mul.fpr[12] = 4;
+    try runWords(&mul, &.{ 0xFC210332, 0x4e800020 }); // fmul f1,f1,f12
+    try testing.expectEqual(@as(f64, 12), mul.fpr[1]);
+
+    var add = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    add.fpr[1] = 2;
+    add.fpr[0] = 3;
+    add.fpr[9] = 4;
+    try runWords(&add, &.{ 0xFC21483A, 0x4e800020 }); // fmadd f1,f1,f0,f9
+    try testing.expectEqual(@as(f64, 10), add.fpr[1]);
 }
 
 test "addic carry feeds subfe" {

@@ -216,6 +216,11 @@ pub const Ctx = struct {
         return if (y == 0) 0 else x / y;
     }
 
+    pub fn divdu(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        return if (b == 0) 0 else a / b;
+    }
+
     pub fn slw(self: *const Ctx, a: u64, b: u64) u64 {
         _ = self;
         return @as(u32, @truncate(a)) << @intCast(b & 31);
@@ -236,7 +241,7 @@ pub const Ctx = struct {
         return a >> @intCast(b & 63);
     }
 
-    pub fn sradi(self: *const Ctx, a: u64, sh: u5) u64 {
+    pub fn sradi(self: *const Ctx, a: u64, sh: u6) u64 {
         _ = self;
         const x: i64 = @bitCast(a);
         return @bitCast(x >> @intCast(sh));
@@ -362,6 +367,18 @@ pub const Ctx = struct {
         return @bitCast(@as(u64, @bitCast(@as(i64, result))));
     }
 
+    /// `fctidz`: leaves the 64-bit integer bit pattern in the FPR.
+    pub fn fctidz(_: *Ctx, value: f64) f64 {
+        var result: i64 = std.math.minInt(i64);
+        if (std.math.isFinite(value)) {
+            const truncated = @trunc(value);
+            if (truncated >= -9223372036854775808.0 and truncated < 9223372036854775808.0) {
+                result = @intFromFloat(truncated);
+            }
+        }
+        return @bitCast(@as(u64, @bitCast(result)));
+    }
+
     fn writeCrField(self: *Ctx, crf: u3, field: u32) void {
         const shift: u5 = @intCast((7 - @as(u32, crf)) * 4);
         const mask: u32 = @as(u32, 0xf) << shift;
@@ -401,6 +418,24 @@ pub const Ctx = struct {
     /// CR bit 0 is the most significant bit of CR.
     pub fn crBit(self: *const Ctx, bit: u5) u1 {
         return @truncate(self.cr >> @intCast(31 - bit));
+    }
+
+    pub fn setCrBit(self: *Ctx, bit: u5, value: u1) void {
+        const shift: u5 = @intCast(31 - bit);
+        const mask: u32 = @as(u32, 1) << shift;
+        if (value == 1) {
+            self.cr |= mask;
+        } else {
+            self.cr &= ~mask;
+        }
+    }
+
+    pub fn crField(self: *const Ctx, crf: u3) u4 {
+        return @truncate(self.cr >> @intCast((7 - @as(u32, crf)) * 4));
+    }
+
+    pub fn setCrField(self: *Ctx, crf: u3, value: u4) void {
+        self.writeCrField(crf, value);
     }
 
     pub fn loadVmx(self: *Ctx, addr: u32) [16]u8 {

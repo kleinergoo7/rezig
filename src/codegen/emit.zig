@@ -127,6 +127,27 @@ pub fn supports(op: insn) bool {
         .addic,
         .twi,
         .tw,
+        .andis_dot,
+        .cr_op,
+        .mcrf,
+        .rfid,
+        .fsqrts,
+        .fctidz,
+        .fmsubs,
+        .fnmsubs,
+        .fnmadds,
+        .fmadd,
+        .fmsub,
+        .fnmsub,
+        .fnmadd,
+        .fabs,
+        .lfsu,
+        .stfsu,
+        .lfdu,
+        .stfdu,
+        .lfdx,
+        .stfsx,
+        .stfdx,
         .xoris,
         .addc,
         .adde,
@@ -141,6 +162,9 @@ pub fn supports(op: insn) bool {
         .mulld,
         .divw,
         .divwu,
+        .divdu,
+        .rlwnm,
+        .stbux,
         .slw,
         .srw,
         .sld,
@@ -183,6 +207,8 @@ pub fn supports(op: insn) bool {
         .lbzux,
         .lwbrx,
         .lhbrx,
+        .lhax,
+        .lhaux,
         .stwbrx,
         .sthbrx,
         => true,
@@ -234,7 +260,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 touches_ctx = true;
             },
             .blr, .nop => {},
-            .bc, .bclr => {
+            .bc, .bclr, .rfid => {
                 has_branch = true;
                 touches_ctx = true;
             },
@@ -324,6 +350,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                     });
                 }
             },
+            .rfid => try out.appendSlice(allocator, "                ctx.msr = ctx.getSpr(27);\n                pc = @truncate(ctx.getSpr(26));\n"),
             else => {
                 try lower(allocator, &out, op, addr, opts.call());
                 try out.print(allocator, "                pc = 0x{X};\n", .{next});
@@ -389,6 +416,12 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
             });
             try recordCr(allocator, out, op.rlwinm.rc, true, op.rlwinm.ra);
         },
+        .rlwnm => {
+            try out.print(allocator, "    ctx.gpr[{d}] = std.math.rotl(u32, @as(u32, @truncate(ctx.gpr[{d}])), @as(u5, @truncate(ctx.gpr[{d}]))) & 0x{X:0>8};\n", .{
+                op.rlwnm.ra, op.rlwnm.rs, op.rlwnm.rb, mask32(op.rlwnm.mb, op.rlwnm.me),
+            });
+            try recordCr(allocator, out, op.rlwnm.rc, true, op.rlwnm.ra);
+        },
         .mflr => try mov(allocator, out, op.mflr.rt, "lr"),
         .mtlr => try movTo(allocator, out, "lr", op.mtlr.rt),
         .mfctr => try mov(allocator, out, op.mfctr.rt, "ctr"),
@@ -428,6 +461,13 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
         .fmadds => try out.print(allocator, "    ctx.fpr[{d}] = @floatCast(@as(f32, @floatCast(ctx.fpr[{d}])) * @as(f32, @floatCast(ctx.fpr[{d}])) + @as(f32, @floatCast(ctx.fpr[{d}])));\n", .{ op.fmadds.frd, op.fmadds.fra, op.fmadds.frc, op.fmadds.frb }),
         .fctiwz => try out.print(allocator, "    ctx.fpr[{d}] = ctx.fctiwz(ctx.fpr[{d}]);\n", .{ op.fctiwz.frd, op.fctiwz.frb }),
         .lfs => try fLoad(allocator, out, op.lfs.frd, op.lfs.ra, op.lfs.imm),
+        .lfsu => try fLoadUpdate(allocator, out, op.lfsu.frd, op.lfsu.ra, op.lfsu.imm, 32),
+        .stfsu => try fStoreUpdate(allocator, out, op.stfsu.frd, op.stfsu.ra, op.stfsu.imm, 32),
+        .lfdu => try fLoadUpdate(allocator, out, op.lfdu.frd, op.lfdu.ra, op.lfdu.imm, 64),
+        .stfdu => try fStoreUpdate(allocator, out, op.stfdu.frd, op.stfdu.ra, op.stfdu.imm, 64),
+        .lfdx => try fIndexedLoad(allocator, out, op.lfdx.frd, op.lfdx.fra, op.lfdx.frb, 64),
+        .stfsx => try fIndexedStore(allocator, out, op.stfsx.frd, op.stfsx.fra, op.stfsx.frb, 32),
+        .stfdx => try fIndexedStore(allocator, out, op.stfdx.frd, op.stfdx.fra, op.stfdx.frb, 64),
         .lvx => try vmem(allocator, out, op.lvx, true),
         .stvx => try vmem(allocator, out, op.stvx, false),
         .vor, .vxor, .vaddfp => {
@@ -446,6 +486,16 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
             try out.print(allocator, "    ctx.vmx[{d}] = ctx.{s}(ctx.vmx[{d}], ctx.vmx[{d}]);\n", .{ vd, name, va, vb });
         },
         .stfs => try fStore(allocator, out, op.stfs.frd, op.stfs.ra, op.stfs.imm),
+        .fmsubs => try fma(allocator, out, "f32", "-", op.fmsubs.frd, op.fmsubs.fra, op.fmsubs.frc, op.fmsubs.frb, false),
+        .fnmsubs => try fma(allocator, out, "f32", "-", op.fnmsubs.frd, op.fnmsubs.fra, op.fnmsubs.frc, op.fnmsubs.frb, true),
+        .fnmadds => try fma(allocator, out, "f32", "+", op.fnmadds.frd, op.fnmadds.fra, op.fnmadds.frc, op.fnmadds.frb, true),
+        .fmadd => try fma(allocator, out, "f64", "+", op.fmadd.frd, op.fmadd.fra, op.fmadd.frc, op.fmadd.frb, false),
+        .fmsub => try fma(allocator, out, "f64", "-", op.fmsub.frd, op.fmsub.fra, op.fmsub.frc, op.fmsub.frb, false),
+        .fnmsub => try fma(allocator, out, "f64", "-", op.fnmsub.frd, op.fnmsub.fra, op.fnmsub.frc, op.fnmsub.frb, true),
+        .fnmadd => try fma(allocator, out, "f64", "+", op.fnmadd.frd, op.fnmadd.fra, op.fnmadd.frc, op.fnmadd.frb, true),
+        .fabs => try out.print(allocator, "    ctx.fpr[{d}] = @abs(ctx.fpr[{d}]);\n", .{ op.fabs.frd, op.fabs.frb }),
+        .fsqrts => try out.print(allocator, "    ctx.fpr[{d}] = @floatCast(@sqrt(@as(f32, @floatCast(ctx.fpr[{d}]))));\n", .{ op.fsqrts.frd, op.fsqrts.frb }),
+        .fctidz => try out.print(allocator, "    ctx.fpr[{d}] = ctx.fctidz(ctx.fpr[{d}]);\n", .{ op.fctidz.frd, op.fctidz.frb }),
         .fadd => try fBinop(allocator, out, "+", op.fadd.frd, op.fadd.fra, op.fadd.frb),
         .fsub => try fBinop(allocator, out, "-", op.fsub.frd, op.fsub.fra, op.fsub.frb),
         .fmul => try fBinop(allocator, out, "*", op.fmul.frd, op.fmul.fra, op.fmul.frb),
@@ -554,13 +604,14 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
             }
             try recordCr(allocator, out, rc, false, rt);
         },
-        .mulhw, .mulhwu, .mulld, .divw, .divwu, .slw, .srw, .sld, .srd => {
+        .mulhw, .mulhwu, .mulld, .divw, .divwu, .divdu, .slw, .srw, .sld, .srd => {
             const f = switch (op) {
                 .mulhw => |v| v,
                 .mulhwu => |v| v,
                 .mulld => |v| v,
                 .divw => |v| v,
                 .divwu => |v| v,
+                .divdu => |v| v,
                 .slw => |v| v,
                 .srw => |v| v,
                 .sld => |v| v,
@@ -627,14 +678,36 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
         .sthx => try indexedStore(allocator, out, op.sthx.rt, op.sthx.ra, op.sthx.rb, 16),
         .ldx => try indexedLoad(allocator, out, op.ldx.rt, op.ldx.ra, op.ldx.rb, 8),
         .stdx => try indexedStore(allocator, out, op.stdx.rt, op.stdx.ra, op.stdx.rb, 64),
+        .stbux => try indexedUpdateStore(allocator, out, op.stbux.rt, op.stbux.ra, op.stbux.rb, 8),
         .lwzux => try indexedUpdateLoad(allocator, out, op.lwzux.rt, op.lwzux.ra, op.lwzux.rb, 32),
         .stwux => try indexedUpdateStore(allocator, out, op.stwux.rt, op.stwux.ra, op.stwux.rb, 32),
         .lbzux => try indexedUpdateLoad(allocator, out, op.lbzux.rt, op.lbzux.ra, op.lbzux.rb, 8),
         .lwbrx => try indexedLoadBr(allocator, out, op.lwbrx.rt, op.lwbrx.ra, op.lwbrx.rb, 32),
         .lhbrx => try indexedLoadBr(allocator, out, op.lhbrx.rt, op.lhbrx.ra, op.lhbrx.rb, 16),
+        .lhax => try indexedLoadSigned16(allocator, out, op.lhax.rt, op.lhax.ra, op.lhax.rb, false),
+        .lhaux => try indexedLoadSigned16(allocator, out, op.lhaux.rt, op.lhaux.ra, op.lhaux.rb, true),
         .stwbrx => try indexedStoreBr(allocator, out, op.stwbrx.rt, op.stwbrx.ra, op.stwbrx.rb, 32),
         .sthbrx => try indexedStoreBr(allocator, out, op.sthbrx.rt, op.sthbrx.ra, op.sthbrx.rb, 16),
         .xoris => try out.print(allocator, "    ctx.gpr[{d}] = ctx.gpr[{d}] ^ (@as(u64, 0x{X:0>4}) << 16);\n", .{ op.xoris.ra, op.xoris.rt, op.xoris.imm }),
+        .andis_dot => {
+            try out.print(allocator, "    ctx.gpr[{d}] = ctx.gpr[{d}] & (@as(u64, 0x{X:0>4}) << 16);\n", .{ op.andis_dot.ra, op.andis_dot.rt, op.andis_dot.imm });
+            try recordCr(allocator, out, true, false, op.andis_dot.ra);
+        },
+        .cr_op => {
+            const f = op.cr_op;
+            const expr = switch (f.kind) {
+                .crand => "a & b",
+                .crandc => "a & (~b)",
+                .creqv => "~(a ^ b)",
+                .crnand => "~(a & b)",
+                .crnor => "~(a | b)",
+                .cror => "a | b",
+                .crorc => "a | (~b)",
+                .crxor => "a ^ b",
+            };
+            try out.print(allocator, "    {{\n        const a = ctx.crBit({d});\n        const b = ctx.crBit({d});\n        ctx.setCrBit({d}, {s});\n    }}\n", .{ f.ba, f.bb, f.bt, expr });
+        },
+        .mcrf => try out.print(allocator, "    ctx.setCrField({d}, ctx.crField({d}));\n", .{ op.mcrf.crf_d, op.mcrf.crf_s }),
         else => return error.UnsupportedOpcode,
     }
 }
@@ -798,6 +871,88 @@ fn fStore(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frd: u8, ra: u8
     }
 }
 
+fn fma(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    comptime ty: []const u8,
+    comptime op: []const u8,
+    frd: u8,
+    fra: u8,
+    frc: u8,
+    frb: u8,
+    negate: bool,
+) !void {
+    if (std.mem.eql(u8, ty, "f32")) {
+        if (negate) {
+            try out.print(allocator, "    ctx.fpr[{d}] = @floatCast(-(@as(f32, @floatCast(ctx.fpr[{d}])) * @as(f32, @floatCast(ctx.fpr[{d}])) {s} @as(f32, @floatCast(ctx.fpr[{d}]))));\n", .{ frd, fra, frc, op, frb });
+        } else {
+            try out.print(allocator, "    ctx.fpr[{d}] = @floatCast(@as(f32, @floatCast(ctx.fpr[{d}])) * @as(f32, @floatCast(ctx.fpr[{d}])) {s} @as(f32, @floatCast(ctx.fpr[{d}])));\n", .{ frd, fra, frc, op, frb });
+        }
+        return;
+    }
+    if (negate) {
+        try out.print(allocator, "    ctx.fpr[{d}] = -(ctx.fpr[{d}] * ctx.fpr[{d}] {s} ctx.fpr[{d}]);\n", .{ frd, fra, frc, op, frb });
+    } else {
+        try out.print(allocator, "    ctx.fpr[{d}] = ctx.fpr[{d}] * ctx.fpr[{d}] {s} ctx.fpr[{d}];\n", .{ frd, fra, frc, op, frb });
+    }
+}
+
+fn fLoadUpdate(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frd: u8, ra: u8, imm: i16, comptime bits: u8) !void {
+    const value = @as(u32, @bitCast(@as(i32, imm)));
+    try out.appendSlice(allocator, "    {\n");
+    try out.print(allocator, "        const ea: u32 = @as(u32, @truncate(ctx.gpr[{d}])) +% 0x{X:0>8};\n", .{ ra, value });
+    if (bits == 32) {
+        try out.print(allocator, "        ctx.fpr[{d}] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(ea))))));\n", .{frd});
+    } else {
+        try out.print(allocator, "        ctx.fpr[{d}] = @bitCast(ctx.load64(ea));\n", .{frd});
+    }
+    try out.print(allocator, "        ctx.gpr[{d}] = ea;\n    }}\n", .{ra});
+}
+
+fn fStoreUpdate(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frd: u8, ra: u8, imm: i16, comptime bits: u8) !void {
+    const value = @as(u32, @bitCast(@as(i32, imm)));
+    try out.appendSlice(allocator, "    {\n");
+    try out.print(allocator, "        const ea: u32 = @as(u32, @truncate(ctx.gpr[{d}])) +% 0x{X:0>8};\n", .{ ra, value });
+    if (bits == 32) {
+        try out.print(allocator, "        ctx.store32(ea, @as(u32, @bitCast(@as(f32, @floatCast(ctx.fpr[{d}])))));\n", .{frd});
+    } else {
+        try out.print(allocator, "        ctx.store64(ea, @bitCast(ctx.fpr[{d}]));\n", .{frd});
+    }
+    try out.print(allocator, "        ctx.gpr[{d}] = ea;\n    }}\n", .{ra});
+}
+
+fn fIndexedLoad(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frd: u8, ra: u8, rb: u8, comptime bits: u8) !void {
+    if (ra == 0) {
+        if (bits == 32) {
+            try out.print(allocator, "    ctx.fpr[{d}] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(@as(u32, @truncate(ctx.gpr[{d}]))))))));\n", .{ frd, rb });
+        } else {
+            try out.print(allocator, "    ctx.fpr[{d}] = @bitCast(ctx.load64(@as(u32, @truncate(ctx.gpr[{d}]))));\n", .{ frd, rb });
+        }
+        return;
+    }
+    if (bits == 32) {
+        try out.print(allocator, "    ctx.fpr[{d}] = @floatCast(@as(f32, @bitCast(@as(u32, @truncate(ctx.load32(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}]))))))));\n", .{ frd, ra, rb });
+    } else {
+        try out.print(allocator, "    ctx.fpr[{d}] = @bitCast(ctx.load64(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}]))));\n", .{ frd, ra, rb });
+    }
+}
+
+fn fIndexedStore(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frd: u8, ra: u8, rb: u8, comptime bits: u8) !void {
+    if (ra == 0) {
+        if (bits == 32) {
+            try out.print(allocator, "    ctx.store32(@as(u32, @truncate(ctx.gpr[{d}])), @as(u32, @bitCast(@as(f32, @floatCast(ctx.fpr[{d}])))));\n", .{ rb, frd });
+        } else {
+            try out.print(allocator, "    ctx.store64(@as(u32, @truncate(ctx.gpr[{d}])), @bitCast(ctx.fpr[{d}]));\n", .{ rb, frd });
+        }
+        return;
+    }
+    if (bits == 32) {
+        try out.print(allocator, "    ctx.store32(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}])), @as(u32, @bitCast(@as(f32, @floatCast(ctx.fpr[{d}])))));\n", .{ ra, rb, frd });
+    } else {
+        try out.print(allocator, "    ctx.store64(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}])), @bitCast(ctx.fpr[{d}]));\n", .{ ra, rb, frd });
+    }
+}
+
 fn load64(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, ra: u8, ds: i16, update: bool) !void {
     const value = @as(u32, @bitCast(@as(i32, ds)));
     if (ra == 0) {
@@ -851,6 +1006,21 @@ fn indexedLoadBr(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, 
         try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}br(@as(u32, @truncate(ctx.gpr[{d}])));\n", .{ rt, bits, rb });
     } else {
         try out.print(allocator, "    ctx.gpr[{d}] = ctx.load{d}br(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}])));\n", .{ rt, bits, ra, rb });
+    }
+}
+
+fn indexedLoadSigned16(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rt: u8, ra: u8, rb: u8, update: bool) !void {
+    if (update) {
+        try out.appendSlice(allocator, "    {\n");
+        try out.print(allocator, "        const ea: u32 = @as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}]));\n", .{ ra, rb });
+        try out.print(allocator, "        ctx.gpr[{d}] = @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(ctx.load16(ea)))))));\n", .{rt});
+        try out.print(allocator, "        ctx.gpr[{d}] = ea;\n    }}\n", .{ra});
+        return;
+    }
+    if (ra == 0) {
+        try out.print(allocator, "    ctx.gpr[{d}] = @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(ctx.load16(@as(u32, @truncate(ctx.gpr[{d}])))))))));\n", .{ rt, rb });
+    } else {
+        try out.print(allocator, "    ctx.gpr[{d}] = @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(ctx.load16(@as(u32, @truncate(ctx.gpr[{d}])) +% @as(u32, @truncate(ctx.gpr[{d}])))))))));\n", .{ rt, ra, rb });
     }
 }
 
@@ -1065,6 +1235,18 @@ test "record forms update CR0" {
     const rot_text = try function(testing.allocator, &rot, .{ .addr = 0x100 });
     defer testing.allocator.free(rot_text);
     try testing.expect(std.mem.indexOf(u8, rot_text, "ctx.setCr32(0, ctx.gpr[3], 0, true);") != null);
+}
+
+test "fmul reads the FRC operand and fmadd reads both" {
+    const mul = [_]u32{ 0xFC210332, 0x4e800020 }; // fmul f1,f1,f12
+    const mul_text = try function(testing.allocator, &mul, .{ .addr = 0x100 });
+    defer testing.allocator.free(mul_text);
+    try testing.expect(std.mem.indexOf(u8, mul_text, "ctx.fpr[1] = ctx.fpr[1] * ctx.fpr[12];") != null);
+
+    const add = [_]u32{ 0xFC21483A, 0x4e800020 }; // fmadd f1,f1,f0,f9
+    const add_text = try function(testing.allocator, &add, .{ .addr = 0x100 });
+    defer testing.allocator.free(add_text);
+    try testing.expect(std.mem.indexOf(u8, add_text, "ctx.fpr[1] = ctx.fpr[1] * ctx.fpr[0] + ctx.fpr[9];") != null);
 }
 
 test "addic and subfe lower through the carry helpers" {

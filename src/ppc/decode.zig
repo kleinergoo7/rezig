@@ -15,8 +15,9 @@ pub const CmpLForm = struct { crf: u3, ra: u8, imm: u16 };
 pub const CmpXForm = struct { crf: u3, ra: u8, rb: u8 };
 pub const DSForm = struct { rt: u8, ra: u8, ds: i16 };
 pub const XForm = struct { rt: u8, ra: u8, rb: u8, rc: bool = false };
-pub const ShiftForm = struct { ra: u8, rs: u8, sh: u5, rc: bool = false };
+pub const ShiftForm = struct { ra: u8, rs: u8, sh: u6, rc: bool = false };
 pub const RotForm = struct { ra: u8, rs: u8, sh: u5, mb: u5, me: u5, rc: bool = false };
+pub const RlwnmForm = struct { ra: u8, rs: u8, rb: u8, mb: u5, me: u5, rc: bool = false };
 pub const RldicrForm = struct { ra: u8, rs: u8, sh: u6, me: u6, rc: bool = false };
 pub const BranchForm = struct { target: u32, absolute: bool, link: bool };
 pub const BcForm = struct { bo: u5, bi: u5, target: u32, absolute: bool, link: bool, to_ctr: bool = false };
@@ -24,6 +25,9 @@ pub const SprForm = struct { rt: u8, spr: u10 = 0 };
 pub const OcrfForm = struct { rt: u8, crm: u8 };
 pub const TwiForm = struct { to: u5, ra: u8, imm: i16 };
 pub const TwForm = struct { to: u5, ra: u8, rb: u8 };
+pub const CrKind = enum { crand, crandc, creqv, crnand, crnor, cror, crorc, crxor };
+pub const CrOpForm = struct { kind: CrKind, bt: u5, ba: u5, bb: u5 };
+pub const McrfForm = struct { crf_d: u3, crf_s: u3 };
 pub const FForm = struct { frd: u8, fra: u8, frb: u8, rc: bool = false };
 pub const FCmpForm = struct { crf: u3, fra: u8, frb: u8 };
 pub const FdForm = struct { frd: u8, ra: u8, imm: i16 };
@@ -42,6 +46,10 @@ pub const Instruction = union(enum) {
     addic: AddicForm,
     twi: TwiForm,
     tw: TwForm,
+    andis_dot: UForm,
+    cr_op: CrOpForm,
+    mcrf: McrfForm,
+    rfid,
     lwz: DForm,
     lwzu: DForm,
     stw: DForm,
@@ -51,7 +59,11 @@ pub const Instruction = union(enum) {
     stb: DForm,
     sth: DForm,
     lfs: FdForm,
+    lfsu: FdForm,
     stfs: FdForm,
+    stfsu: FdForm,
+    lfdu: FdForm,
+    stfdu: FdForm,
     ori: UForm,
     oris: UForm,
     andi_dot: UForm,
@@ -97,6 +109,7 @@ pub const Instruction = union(enum) {
     mulld: XForm,
     divw: XForm,
     divwu: XForm,
+    divdu: XForm,
     slw: XForm,
     srw: XForm,
     sld: XForm,
@@ -111,6 +124,7 @@ pub const Instruction = union(enum) {
     sraw: XForm,
     srawi: ShiftForm,
     rlwinm: RotForm,
+    rlwnm: RlwnmForm,
     b: BranchForm,
     bl: BranchForm,
     bc: BcForm,
@@ -144,6 +158,7 @@ pub const Instruction = union(enum) {
     lhau: DForm,
     stbu: DForm,
     sthu: DForm,
+    stbux: XForm,
     sthx: XForm,
     ldx: XForm,
     stdx: XForm,
@@ -152,6 +167,8 @@ pub const Instruction = union(enum) {
     lbzux: XForm,
     lwbrx: XForm,
     lhbrx: XForm,
+    lhax: XForm,
+    lhaux: XForm,
     stwbrx: XForm,
     sthbrx: XForm,
     lfdx: FForm,
@@ -165,13 +182,23 @@ pub const Instruction = union(enum) {
     fmr: FForm,
     frsp: FForm,
     fneg: FForm,
+    fabs: FForm,
     fcfid: FForm,
     fadds: FForm,
     fsubs: FForm,
     fmuls: FForm,
     fdivs: FForm,
+    fsqrts: FForm,
     fctiwz: FForm,
+    fctidz: FForm,
     fmadds: FMForm,
+    fmsubs: FMForm,
+    fnmsubs: FMForm,
+    fnmadds: FMForm,
+    fmadd: FMForm,
+    fmsub: FMForm,
+    fnmsub: FMForm,
+    fnmadd: FMForm,
     lhz: DForm,
     rlwimi: RotForm,
     lfd: FdForm,
@@ -208,6 +235,7 @@ pub fn decode(word: u32) Error!Instruction {
         26 => .{ .xori = uForm(word) },
         27 => .{ .xoris = uForm(word) },
         28 => .{ .andi_dot = uForm(word) },
+        29 => .{ .andis_dot = uForm(word) },
         32 => .{ .lwz = dForm(word) },
         33 => .{ .lwzu = dForm(word) },
         36 => .{ .stw = dForm(word) },
@@ -223,9 +251,13 @@ pub fn decode(word: u32) Error!Instruction {
         44 => .{ .sth = dForm(word) },
         45 => .{ .sthu = dForm(word) },
         48 => .{ .lfs = fdForm(word) },
+        49 => .{ .lfsu = fdForm(word) },
         50 => .{ .lfd = fdForm(word) },
+        51 => .{ .lfdu = fdForm(word) },
         52 => .{ .stfs = fdForm(word) },
+        53 => .{ .stfsu = fdForm(word) },
         54 => .{ .stfd = fdForm(word) },
+        55 => .{ .stfdu = fdForm(word) },
         59 => try decodeAForm(word, 59),
         58 => switch (word & 0x3) {
             0 => .{ .ld = dsForm(word) },
@@ -244,6 +276,14 @@ pub fn decode(word: u32) Error!Instruction {
             .rc = word & 1 != 0,
         } },
         18 => if (word & 1 != 0) .{ .bl = branchForm(word) } else .{ .b = branchForm(word) },
+        23 => .{ .rlwnm = .{
+            .ra = ra(word),
+            .rs = rt(word),
+            .rb = rb(word),
+            .mb = @truncate((word >> 6) & 0x1f),
+            .me = @truncate((word >> 1) & 0x1f),
+            .rc = word & 1 != 0,
+        } },
         20 => .{ .rlwimi = .{
             .ra = ra(word),
             .rs = rt(word),
@@ -254,7 +294,17 @@ pub fn decode(word: u32) Error!Instruction {
         } },
         16 => .{ .bc = bcForm(word) },
         19 => switch (xo10(word)) {
+            0 => .{ .mcrf = .{ .crf_d = crf(word), .crf_s = @truncate((word >> 18) & 0x7) } },
+            18 => .rfid,
+            33 => crOp(.crnor, word),
+            129 => crOp(.crandc, word),
             150 => .isync,
+            193 => crOp(.crxor, word),
+            225 => crOp(.crnand, word),
+            257 => crOp(.crand, word),
+            289 => crOp(.creqv, word),
+            417 => crOp(.crorc, word),
+            449 => crOp(.cror, word),
             16 => if (bo(word) == 20 and bi(word) == 0 and word & 1 == 0)
                 .blr
             else
@@ -307,6 +357,14 @@ pub fn isBranch(insn: Instruction) bool {
 }
 
 fn decodeXForm(word: u32) Error!Instruction {
+    if ((word >> 2) & 0x1ff == 413) {
+        return .{ .sradi = .{
+            .ra = ra(word),
+            .rs = rt(word),
+            .sh = @intCast(((word >> 11) & 0x1f) | (((word >> 1) & 1) << 5)),
+            .rc = word & 1 != 0,
+        } };
+    }
     const xo = xo10(word);
     if (word == 0x60000000) return .nop;
     return switch (xo) {
@@ -314,8 +372,10 @@ fn decodeXForm(word: u32) Error!Instruction {
             .{ .cmpw = .{ .crf = crf(word), .ra = ra(word), .rb = rb(word) } }
         else
             .{ .cmpd = .{ .crf = crf(word), .ra = ra(word), .rb = rb(word) } },
+        4 => .{ .tw = .{ .to = @truncate((word >> 21) & 0x1f), .ra = ra(word), .rb = rb(word) } },
         8 => .{ .subfc = xForm(word) },
         10 => .{ .addc = xForm(word) },
+        11 => .{ .mulhwu = xForm(word) },
         20 => .{ .lwarx = xForm(word) },
         21 => .{ .ldx = xForm(word) },
         24 => .{ .slw = xForm(word) },
@@ -344,6 +404,7 @@ fn decodeXForm(word: u32) Error!Instruction {
         202 => .{ .addze = xForm(word) },
         232 => .{ .subfme = xForm(word) },
         233 => .{ .mulld = xForm(word) },
+        247 => .{ .stbux = xForm(word) },
         235 => .{ .mullw = xForm(word) },
         266 => .{ .add = xForm(word) },
         278 => .{ .dcbt = xForm(word) },
@@ -351,14 +412,11 @@ fn decodeXForm(word: u32) Error!Instruction {
         316 => .{ .xor_ = xForm(word) },
         339 => sprMove(word, false),
         19 => .{ .mfocrf = .{ .rt = rt(word), .crm = @truncate((word >> 12) & 0xff) } },
+        343 => .{ .lhax = xForm(word) },
+        375 => .{ .lhaux = xForm(word) },
         407 => .{ .sthx = xForm(word) },
-        413 => .{ .sradi = .{
-            .ra = ra(word),
-            .rs = rt(word),
-            .sh = @truncate((word >> 11) & 0x1f),
-            .rc = word & 1 != 0,
-        } },
         444 => .{ .or_ = xForm(word) },
+        457 => .{ .divdu = xForm(word) },
         459 => .{ .divwu = xForm(word) },
         467 => sprMove(word, true),
         491 => .{ .divw = xForm(word) },
@@ -401,16 +459,29 @@ fn decodeXForm(word: u32) Error!Instruction {
 }
 
 fn decodeAForm(word: u32, primary: u8) Error!Instruction {
+    const xo5 = (word >> 1) & 0x1f;
+    const fma = FMForm{ .frd = frd(word), .fra = fra(word), .frc = frc(word), .frb = frb(word), .rc = word & 1 != 0 };
     if (primary == 59) {
-        const xo5 = (word >> 1) & 0x1f;
         return switch (xo5) {
-            21 => .{ .fadds = fForm(word) },
-            20 => .{ .fsubs = fForm(word) },
-            25 => .{ .fmuls = fForm(word) },
-            29 => .{ .fmadds = .{ .frd = frd(word), .fra = fra(word), .frc = frc(word), .frb = frb(word), .rc = word & 1 != 0 } },
             18 => .{ .fdivs = fForm(word) },
+            20 => .{ .fsubs = fForm(word) },
+            21 => .{ .fadds = fForm(word) },
+            22 => .{ .fsqrts = fForm(word) },
+            25 => .{ .fmuls = .{ .frd = frd(word), .fra = fra(word), .frb = frc(word), .rc = word & 1 != 0 } },
+            28 => .{ .fmsubs = fma },
+            29 => .{ .fmadds = fma },
+            30 => .{ .fnmsubs = fma },
+            31 => .{ .fnmadds = fma },
             else => error.Unsupported,
         };
+    }
+    switch (xo5) {
+        25 => return .{ .fmul = .{ .frd = frd(word), .fra = fra(word), .frb = frc(word), .rc = word & 1 != 0 } },
+        28 => return .{ .fmsub = fma },
+        29 => return .{ .fmadd = fma },
+        30 => return .{ .fnmsub = fma },
+        31 => return .{ .fnmadd = fma },
+        else => {},
     }
     const xo = (word >> 1) & 0x3ff;
     return switch (xo) {
@@ -419,10 +490,12 @@ fn decodeAForm(word: u32, primary: u8) Error!Instruction {
         18 => .{ .fdiv = fForm(word) },
         20 => .{ .fsub = fForm(word) },
         21 => .{ .fadd = fForm(word) },
-        25 => .{ .fmul = fForm(word) },
+        25 => .{ .fmul = .{ .frd = frd(word), .fra = fra(word), .frb = frc(word), .rc = word & 1 != 0 } },
         12 => .{ .frsp = fForm(word) },
         40 => .{ .fneg = fForm(word) },
         72 => .{ .fmr = fForm(word) },
+        264 => .{ .fabs = fForm(word) },
+        815 => .{ .fctidz = fForm(word) },
         846 => .{ .fcfid = fForm(word) },
         else => error.Unsupported,
     };
@@ -513,11 +586,20 @@ fn frd(word: u32) u8 {
 }
 
 fn frc(word: u32) u8 {
-    return @truncate((word >> 11) & 0x1f);
+    return @truncate((word >> 6) & 0x1f);
 }
 
 fn frb(word: u32) u8 {
     return @truncate((word >> 11) & 0x1f);
+}
+
+fn crOp(kind: CrKind, word: u32) Instruction {
+    return .{ .cr_op = .{
+        .kind = kind,
+        .bt = @truncate((word >> 21) & 0x1f),
+        .ba = @truncate((word >> 16) & 0x1f),
+        .bb = @truncate((word >> 11) & 0x1f),
+    } };
 }
 
 fn sprField(word: u32) u10 {
@@ -696,6 +778,13 @@ test "record forms carry the rc bit" {
     try expectDecode(0x5483003f, .{ .rlwinm = .{ .ra = 3, .rs = 4, .sh = 0, .mb = 0, .me = 31, .rc = true } });
     try expectDecode(0x7c632215, .{ .add = .{ .rt = 3, .ra = 3, .rb = 4, .rc = true } });
     try expectDecode(0x7c632039, .{ .and_ = .{ .rt = 3, .ra = 3, .rb = 4, .rc = true } });
+}
+
+test "a-form float encodings use FRC and FRB correctly" {
+    try expectDecode(0xFC210332, .{ .fmul = .{ .frd = 1, .fra = 1, .frb = 12 } });
+    try expectDecode(0xFC21483A, .{ .fmadd = .{ .frd = 1, .fra = 1, .frc = 0, .frb = 9 } });
+    try expectDecode(0xEC64C7F8, .{ .fmsubs = .{ .frd = 3, .fra = 4, .frc = 31, .frb = 24 } });
+    try expectDecode(0xFFE0FA10, .{ .fabs = .{ .frd = 31, .fra = 0, .frb = 31 } });
 }
 
 test "integer and system encodings decode" {
