@@ -81,22 +81,23 @@ pub fn functionsFrom(
         var i: usize = 0;
         while (i < words.len) : (i += 1) {
             const insn = decode.decode(words[i]) catch continue;
-            if (decode.isBranchToLink(insn)) |rel| {
-                const target = addr +% @as(u32, @intCast(i)) *% 4 +% rel;
-                try calls.append(allocator, target);
-                try enqueue(allocator, &queue, &seen, target);
-            }
+            const at = addr +% @as(u32, @intCast(i)) *% 4;
             switch (insn) {
+                .bl => |f| {
+                    const target = if (f.absolute) f.target else at +% f.target;
+                    try calls.append(allocator, target);
+                    try enqueue(allocator, &queue, &seen, target);
+                },
                 .b => |f| {
-                    const target = addr +% @as(u32, @intCast(i)) *% 4 +% f.target;
-                    if (!f.absolute and (target < addr or target >= end)) {
+                    const target = if (f.absolute) f.target else at +% f.target;
+                    if (target < addr or target >= end) {
                         try calls.append(allocator, target);
                         try enqueue(allocator, &queue, &seen, target);
                     }
                 },
                 .bc => |f| {
-                    const target = addr +% @as(u32, @intCast(i)) *% 4 +% f.target;
-                    if (!f.absolute and (target < addr or target >= end)) {
+                    const target = if (f.absolute) f.target else at +% f.target;
+                    if (f.link or target < addr or target >= end) {
                         try calls.append(allocator, target);
                         try enqueue(allocator, &queue, &seen, target);
                     }

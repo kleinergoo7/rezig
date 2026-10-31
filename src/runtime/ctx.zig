@@ -135,28 +135,26 @@ pub const Ctx = struct {
         self.cr = (self.cr & ~mask) | (field << shift);
     }
 
-    /// `bc` and `bclr` accept only the nine encodings compilers emit. The
-    /// predicate is spelled out per encoding so no bit is guessed.
-    pub fn supportedBo(bo: u5) bool {
+    /// Drop the PowerPC branch-hint bits. A `+` or `-` hint sets one bit
+    /// that is otherwise unused by that branch class.
+    fn branchBaseBo(bo: u5) u5 {
         return switch (bo) {
-            0, 2, 4, 8, 10, 12, 16, 18, 20 => true,
-            else => false,
+            6, 7 => 4,
+            14, 15 => 12,
+            21 => 20,
+            24, 25 => 16,
+            26, 27 => 18,
+            else => bo,
         };
     }
 
     /// Evaluates a `bc`/`bclr` condition and applies the CTR update.
-    /// Requires `supportedBo(bo)`.
-    pub fn branch(self: *Ctx, bo: u5, bi: u5) bool {
-        const test_ctr = switch (bo) {
-            4, 12, 20 => false,
-            else => true,
-        };
-        const test_cr = switch (bo) {
-            16, 18, 20 => false,
-            else => true,
-        };
-        const ctr_zero = bo == 2 or bo == 10 or bo == 18;
-        const cr_true = bo == 8 or bo == 10 or bo == 12;
+    pub fn branch(self: *Ctx, bo_raw: u5, bi: u5) bool {
+        const bo = branchBaseBo(bo_raw);
+        const test_ctr = bo & 0b00100 == 0;
+        const test_cr = bo & 0b10000 == 0;
+        const ctr_zero = bo & 0b00010 != 0;
+        const cr_true = bo & 0b01000 != 0;
 
         if (test_ctr) {
             self.ctr -%= 1;
@@ -402,6 +400,36 @@ test "branch implements every supported BO encoding" {
     try std.testing.expect(ctx.branch(10, 0));
     ctx.ctr = 1;
     try std.testing.expect(!ctx.branch(2, 0));
+}
+
+test "branch ignores powerpc hint encodings" {
+    var ctx = Ctx.init(.{ .base = 0, .data = &.{} });
+
+    // bdnz+ ignores CR and decrements CTR.
+    ctx.ctr = 2;
+    ctx.cr = 1 << 31;
+    try std.testing.expect(ctx.branch(25, 0));
+    try std.testing.expectEqual(@as(u64, 1), ctx.ctr);
+
+    // bdz- branches when CTR reaches zero.
+    ctx.ctr = 1;
+    try std.testing.expect(ctx.branch(26, 0));
+    try std.testing.expectEqual(@as(u64, 0), ctx.ctr);
+
+    // bf+ and bf- test CR bit 0 as false.
+    ctx.cr = 0;
+    try std.testing.expect(ctx.branch(7, 0));
+    try std.testing.expect(ctx.branch(6, 0));
+    ctx.cr = 1 << 31;
+    try std.testing.expect(!ctx.branch(7, 0));
+    try std.testing.expect(!ctx.branch(6, 0));
+
+    // bt+ and bt- test CR bit 0 as true.
+    try std.testing.expect(ctx.branch(15, 0));
+    try std.testing.expect(ctx.branch(14, 0));
+
+    // b+ is unconditional.
+    try std.testing.expect(ctx.branch(21, 0));
 }
 
 test "setCrFloat sets LT, GT, EQ and unordered" {

@@ -36,8 +36,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
         switch (insn) {
             .blr => return,
             .bl => |f| {
-                if (f.absolute) return error.Unsupported;
-                const target = cur +% f.target;
+                const target = if (f.absolute) f.target else cur +% f.target;
                 ctx.lr = cur +% 4;
                 const callee = lookup(table, target) orelse {
                     ctx.fault = .{ .kind = .unsupported, .addr = target };
@@ -46,10 +45,10 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 try runTable(ctx, target, callee, table);
             },
             .b => |f| {
-                if (f.absolute or f.link) return error.Unsupported;
-                const target = cur +% f.target;
-                if (target >= entry_addr and target < entry_addr +% @as(u32, @intCast(words.len)) * 4) {
-                    i = try targetIndex(i, f.target, words.len);
+                const target = if (f.absolute) f.target else cur +% f.target;
+                const end = entry_addr +% @as(u32, @intCast(words.len)) * 4;
+                if (target >= entry_addr and target < end) {
+                    i = @intCast((target - entry_addr) / 4);
                     continue;
                 }
                 const callee = lookup(table, target) orelse {
@@ -60,42 +59,57 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 return;
             },
             .bc => |f| {
-                if (f.absolute or f.link or !ctx_mod.Ctx.supportedBo(f.bo)) return error.Unsupported;
-                if (ctx.branch(f.bo, f.bi)) {
-                    const target = cur +% f.target;
-                    const end = entry_addr +% @as(u32, @intCast(words.len)) * 4;
-                    if (target >= entry_addr and target < end) {
-                        i = try targetIndex(i, f.target, words.len);
-                    } else {
-                        const callee = lookup(table, target) orelse {
-                            ctx.fault = .{ .kind = .unsupported, .addr = target };
-                            return;
-                        };
-                        try runTable(ctx, target, callee, table);
-                        return;
-                    }
-                } else {
+                if (!ctx.branch(f.bo, f.bi)) {
                     i += 1;
+                    continue;
                 }
-                continue;
-            },
-            .bclr => |f| {
-                if (f.absolute or !ctx_mod.Ctx.supportedBo(f.bo)) return error.Unsupported;
+                const target = if (f.absolute) f.target else cur +% f.target;
                 if (f.link) {
-                    if (!f.to_ctr or f.bo != 20) return error.Unsupported;
-                    const target = ctx.ctr;
                     ctx.lr = cur +% 4;
                     const callee = lookup(table, target) orelse {
                         ctx.fault = .{ .kind = .unsupported, .addr = target };
                         return;
                     };
                     try runTable(ctx, target, callee, table);
-                    return;
+                    i += 1;
+                    continue;
                 }
-                if (f.to_ctr) return error.Unsupported;
-                if (ctx.branch(f.bo, f.bi)) return;
-                i += 1;
-                continue;
+                const end = entry_addr +% @as(u32, @intCast(words.len)) * 4;
+                if (target >= entry_addr and target < end) {
+                    i = @intCast((target - entry_addr) / 4);
+                    continue;
+                }
+                const callee = lookup(table, target) orelse {
+                    ctx.fault = .{ .kind = .unsupported, .addr = target };
+                    return;
+                };
+                try runTable(ctx, target, callee, table);
+                return;
+            },
+            .bclr => |f| {
+                if (!ctx.branch(f.bo, f.bi)) {
+                    i += 1;
+                    continue;
+                }
+                const target = if (f.to_ctr) ctx.ctr else ctx.lr;
+                if (f.link) {
+                    ctx.lr = cur +% 4;
+                    const callee = lookup(table, target) orelse {
+                        ctx.fault = .{ .kind = .unsupported, .addr = target };
+                        return;
+                    };
+                    try runTable(ctx, target, callee, table);
+                    i += 1;
+                    continue;
+                }
+                if (f.to_ctr) {
+                    const callee = lookup(table, target) orelse {
+                        ctx.fault = .{ .kind = .unsupported, .addr = target };
+                        return;
+                    };
+                    try runTable(ctx, target, callee, table);
+                }
+                return;
             },
             .nop => {},
             .addi => |f| ctx.gpr[f.rt] = base(ctx, f.ra) +% sext(f.imm),
@@ -261,15 +275,6 @@ fn lookup(table: Table, target: u32) ?[]const u32 {
     return null;
 }
 
-/// Branch fields are byte offsets from the current instruction.
-fn targetIndex(current: usize, offset: u32, len: usize) Error!usize {
-    const delta: i32 = @bitCast(offset);
-    if (@rem(delta, 4) != 0) return error.BranchOutOfRange;
-    const next = @as(i64, @intCast(current)) + @divExact(@as(i64, delta), 4);
-    if (next < 0 or next >= @as(i64, @intCast(len))) return error.BranchOutOfRange;
-    return @intCast(next);
-}
-
 /// PowerPC shift amount is the low 6 bits; 32..63 fill with the sign bit.
 fn sraw32(value: u64, shift: u6) u64 {
     const x: i32 = @truncate(@as(i64, @bitCast(value)));
@@ -379,11 +384,40 @@ test "record forms update CR0" {
     try testing.expectEqual(@as(u1, 1), rot.crBit(0)); // less than
 }
 
-test "bctr and bcctr are refused" {
+test "bctr and bcctr run through ctr" {
     var buf: [16]u8 = @splat(0);
-    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
-    try testing.expectError(error.Unsupported, run(&ctx, &.{0x4e800420}));
-    try testing.expectError(error.Unsupported, run(&ctx, &.{0x4d800420}));
+
+    const a = [_]u32{ 0x4e800420, 0x4e800020 }; // bctr; blr
+    const bcctr_words = [_]u32{ 0x4d800420, 0x4e800020 }; // bcctr 12,0; blr
+    const b = [_]u32{ 0x38600007, 0x4e800020 };
+    const table = [_]Entry{
+        .{ .addr = 0x1000, .words = &a },
+        .{ .addr = 0x2000, .words = &b },
+    };
+
+    var direct = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    direct.ctr = 0x2000;
+    try runTable(&direct, 0x1000, &a, &table);
+    try testing.expectEqual(@as(u64, 7), direct.gpr[3]);
+
+    var conditional = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    conditional.ctr = 0x2000;
+    conditional.cr = 1 << 31;
+    try runTable(&conditional, 0x1000, &bcctr_words, &table);
+    try testing.expectEqual(@as(u64, 7), conditional.gpr[3]);
+}
+
+test "conditional bclr returns only when the condition is true" {
+    var buf: [16]u8 = @splat(0);
+
+    var taken = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    taken.cr = 1 << 29; // CR0 EQ
+    try runWords(&taken, &.{ 0x4d820020, 0x38600001, 0x4e800020 });
+    try testing.expectEqual(@as(u64, 0), taken.gpr[3]);
+
+    var not_taken = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    try runWords(&not_taken, &.{ 0x4d820020, 0x38600001, 0x4e800020 });
+    try testing.expectEqual(@as(u64, 1), not_taken.gpr[3]);
 }
 
 test "single-source float ops read frb" {

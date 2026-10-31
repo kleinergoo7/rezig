@@ -5,7 +5,6 @@
 
 const std = @import("std");
 const ppc = @import("../ppc/root.zig");
-const runtime = @import("../runtime/ctx.zig");
 const abi = @import("abi.zig");
 
 pub const Error = error{UnsupportedOpcode} || std.mem.Allocator.Error;
@@ -137,11 +136,7 @@ pub fn supportsAt(op: insn, at: u32, base: u32, end: u32) bool {
     _ = base;
     _ = end;
     return switch (op) {
-        .b => |f| !f.absolute and !f.link,
-        .bc => |f| !f.absolute and !f.link and runtime.Ctx.supportedBo(f.bo),
-        .bclr => |f| !f.absolute and runtime.Ctx.supportedBo(f.bo) and
-            (if (f.link) (f.to_ctr and f.bo == 20) else !f.to_ctr),
-        .bl => |f| !f.absolute,
+        .b, .bc, .bclr, .bl => true,
         else => supports(op),
     };
 }
@@ -224,7 +219,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
         switch (op) {
             .blr => try out.appendSlice(allocator, "                return;\n"),
             .b => |f| {
-                const target = addr +% f.target;
+                const target = if (f.absolute) f.target else addr +% f.target;
                 if (inRange(target, base, end)) {
                     try out.print(allocator, "                pc = 0x{X};\n", .{target});
                 } else {
@@ -232,8 +227,15 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 }
             },
             .bc => |f| {
-                const target = addr +% f.target;
-                if (inRange(target, base, end)) {
+                const target = if (f.absolute) f.target else addr +% f.target;
+                if (f.link and target == next) {
+                    try out.print(allocator, "                ctx.lr = 0x{X};\n                pc = 0x{X};\n", .{ next, next });
+                } else if (f.link) {
+                    try out.print(allocator, "                if (ctx.branch({d}, {d})) {{\n", .{ f.bo, f.bi });
+                    try out.print(allocator, "                    ctx.lr = 0x{X};\n", .{next});
+                    try out.print(allocator, "                    if (!{s}(0x{X}, ctx)) {{\n                        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n                    }}\n", .{ opts.call(), target, target });
+                    try out.print(allocator, "                }}\n                pc = 0x{X};\n", .{next});
+                } else if (inRange(target, base, end)) {
                     try out.print(allocator, "                pc = if (ctx.branch({d}, {d})) 0x{X} else 0x{X};\n", .{
                         f.bo, f.bi, target, next,
                     });
@@ -244,11 +246,17 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 }
             },
             .bclr => |f| {
+                const target = if (f.to_ctr) "ctx.ctr" else "ctx.lr";
                 if (f.link) {
-                    // bctrl: branch to CTR and link.
-                    try out.print(allocator, "                ctx.lr = 0x{X};\n", .{next});
-                    try out.print(allocator, "                if (!{s}(ctx.ctr, ctx)) {{\n                    ctx.fault = .{{ .kind = .unsupported, .addr = ctx.ctr }};\n                    return;\n                }}\n", .{opts.call()});
-                    try out.print(allocator, "                pc = 0x{X};\n", .{next});
+                    try out.print(allocator, "                if (ctx.branch({d}, {d})) {{\n", .{ f.bo, f.bi });
+                    try out.print(allocator, "                    const target: u32 = {s};\n", .{target});
+                    try out.print(allocator, "                    ctx.lr = 0x{X};\n", .{next});
+                    try out.print(allocator, "                    if (!{s}(target, ctx)) {{\n                        ctx.fault = .{{ .kind = .unsupported, .addr = target }};\n                    }}\n", .{opts.call()});
+                    try out.print(allocator, "                }}\n                pc = 0x{X};\n", .{next});
+                } else if (f.to_ctr) {
+                    try out.print(allocator, "                if (ctx.branch({d}, {d})) {{\n", .{ f.bo, f.bi });
+                    try out.print(allocator, "                    if (!{s}(ctx.ctr, ctx)) {{\n                        ctx.fault = .{{ .kind = .unsupported, .addr = ctx.ctr }};\n                    }}\n", .{opts.call()});
+                    try out.print(allocator, "                    return;\n                }}\n                pc = 0x{X};\n", .{next});
                 } else {
                     try out.print(allocator, "                if (ctx.branch({d}, {d})) return;\n                pc = 0x{X};\n", .{
                         f.bo, f.bi, next,
@@ -273,9 +281,12 @@ fn tailCall(allocator: std.mem.Allocator, out: *std.ArrayList(u8), target: u32, 
 
 fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: u32, call: []const u8) Error!void {
     switch (op) {
-        .bl => |f| try out.print(allocator, "    ctx.lr = 0x{X};\n    if (!{s}(0x{X}, ctx)) {{\n        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n        return;\n    }}\n", .{
-            addr +% 4, call, addr +% f.target, addr +% f.target,
-        }),
+        .bl => |f| {
+            const target = if (f.absolute) f.target else addr +% f.target;
+            try out.print(allocator, "    ctx.lr = 0x{X};\n    if (!{s}(0x{X}, ctx)) {{\n        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n        return;\n    }}\n", .{
+                addr +% 4, call, target, target,
+            });
+        },
         .nop => {},
         .addi => try immAdd(allocator, out, op.addi.rt, op.addi.ra, sext(op.addi.imm)),
         .addis => try immAdd(allocator, out, op.addis.rt, op.addis.ra, sext32(op.addis.imm)),
@@ -708,12 +719,37 @@ test "bctrl lowers to an indirect call through ctr" {
     const words = [_]u32{ 0x4e800421, 0x4e800020 };
     const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
     defer testing.allocator.free(text);
-    try testing.expect(std.mem.indexOf(u8, text, "dispatch(ctx.ctr, ctx)") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "const target: u32 = ctx.ctr;") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "dispatch(target, ctx)") != null);
 }
 
-test "absolute linked branches are refused" {
-    const words = [_]u32{ 0x42000003, 0x4e800020 };
-    try testing.expectError(error.UnsupportedOpcode, function(testing.allocator, &words, .{ .addr = 0 }));
+test "bctr and bcctr lower through ctr" {
+    const bctr = [_]u32{ 0x4e800420, 0x4e800020 }; // bctr; blr
+    const bctr_text = try function(testing.allocator, &bctr, .{ .addr = 0x100 });
+    defer testing.allocator.free(bctr_text);
+    try testing.expect(std.mem.indexOf(u8, bctr_text, "dispatch(ctx.ctr, ctx)") != null);
+    try testing.expect(supportsAt(try ppc.decode.decode(0x4e800420), 0, 0, 4));
+
+    const bcctr = [_]u32{ 0x4d800421, 0x4e800020 }; // bcctrl 12,0; blr
+    const bcctr_text = try function(testing.allocator, &bcctr, .{ .addr = 0x100 });
+    defer testing.allocator.free(bcctr_text);
+    try testing.expect(std.mem.indexOf(u8, bcctr_text, "ctx.lr = 0x104;") != null);
+    try testing.expect(std.mem.indexOf(u8, bcctr_text, "const target: u32 = ctx.ctr;") != null);
+    try testing.expect(std.mem.indexOf(u8, bcctr_text, "dispatch(target, ctx)") != null);
+}
+
+test "conditional bclr lowers through branch" {
+    const words = [_]u32{ 0x4d820020, 0x4e800020 }; // bclr 12,2
+    const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "if (ctx.branch(12, 2)) return;") != null);
+}
+
+test "absolute linked branch dispatches its absolute target" {
+    const words = [_]u32{ 0x42000003, 0x4e800020 }; // bc 16,0,0 absolute, link
+    const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "dispatch(0x0, ctx)") != null);
 }
 
 test "float arithmetic lowers to fpr operations" {
@@ -781,12 +817,6 @@ test "cmpwi uses the 32-bit compare helper" {
     const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
     defer testing.allocator.free(text);
     try testing.expect(std.mem.indexOf(u8, text, "ctx.setCr32(0, ctx.gpr[3], 0x0000000000000000, true);") != null);
-}
-
-test "bctr and bcctr are refused, bctrl is kept" {
-    try testing.expect(!supportsAt(try ppc.decode.decode(0x4e800420), 0, 0, 4));
-    try testing.expect(!supportsAt(try ppc.decode.decode(0x4d800420), 0, 0, 4));
-    try testing.expect(supportsAt(try ppc.decode.decode(0x4e800421), 0, 0, 4));
 }
 
 test "record forms update CR0" {

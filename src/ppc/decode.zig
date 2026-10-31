@@ -180,9 +180,9 @@ pub fn decode(word: u32) Error!Instruction {
             16 => if (bo(word) == 20 and bi(word) == 0 and word & 1 == 0)
                 .blr
             else
-                .{ .bclr = bcForm(word) },
+                .{ .bclr = bclrForm(word) },
             528 => blk: {
-                var f = bcForm(word);
+                var f = bclrForm(word);
                 f.to_ctr = true;
                 break :blk .{ .bclr = f };
             },
@@ -416,21 +416,32 @@ fn vMemForm(word: u32) VMemForm {
 }
 
 fn branchForm(word: u32) BranchForm {
-    const offset = @as(i32, @bitCast((word & 0x03ff_fffc) << 6)) >> 6;
+    const raw = word & 0x03ff_fffc;
+    const offset = @as(i32, @bitCast(raw << 6)) >> 6;
+    const absolute = word & 2 != 0;
     return .{
-        .target = @bitCast(offset),
-        .absolute = word & 2 != 0,
+        .target = if (absolute) raw else @bitCast(offset),
+        .absolute = absolute,
         .link = word & 1 != 0,
     };
 }
 
+/// `bclr`/`bcctr` bit 1 is the BH hint, not AA. Their target is a register.
+fn bclrForm(word: u32) BcForm {
+    var f = bcForm(word);
+    f.absolute = false;
+    return f;
+}
+
 fn bcForm(word: u32) BcForm {
-    const offset = @as(i32, @bitCast((word & 0x0000_fffc) << 16)) >> 16;
+    const raw = word & 0x0000_fffc;
+    const offset = @as(i32, @bitCast(raw << 16)) >> 16;
+    const absolute = word & 2 != 0;
     return .{
         .bo = bo(word),
         .bi = bi(word),
-        .target = @bitCast(offset),
-        .absolute = word & 2 != 0,
+        .target = if (absolute) raw else @bitCast(offset),
+        .absolute = absolute,
         .link = word & 1 != 0,
     };
 }

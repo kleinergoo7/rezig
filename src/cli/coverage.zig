@@ -307,7 +307,7 @@ fn percent100(part: u64, whole: u64) u64 {
 const testing = std.testing;
 
 test "collect separates emitted instructions from decoder gaps" {
-    var mixed = [_]u32{ 0x60000000, 0x42000003, 0x00000000, 0x4e800020 };
+    var mixed = [_]u32{ 0x60000000, 0xfc22182b, 0x00000000, 0x4e800020 };
     var clean = [_]u32{ 0x60000000, 0x4e800020 };
     var no_calls = [_]u32{};
     const functions = [_]ppc_analyze.Function{
@@ -328,13 +328,23 @@ test "collect separates emitted instructions from decoder gaps" {
     try testing.expectEqual(@as(u64, 1), summary.undecoded[0].count);
     try testing.expectEqual(@as(usize, 1), summary.fully_emittable);
     try testing.expectEqual(@as(usize, 1), summary.missing.len);
-    try testing.expectEqualStrings("bc", summary.missing[0].name);
+    try testing.expectEqualStrings("fadd", summary.missing[0].name);
     try testing.expectEqual(@as(u64, 1), summary.missing[0].count);
+    try testing.expectEqual(@as(u32, 0x1004), summary.missing[0].addr);
 }
 
-test "collect keeps branch form details and sample addresses" {
-    // Two unsupported bc forms with different BO; one undecoded word.
-    var forms = [_]u32{ 0x42000003, 0x42200003, 0x00000000, 0x4e800020 };
+test "branch forms keep their BO, BI and flags" {
+    const plain = branchDetail(try decode.decode(0x42000000));
+    const hinted = branchDetail(try decode.decode(0x4320fff0));
+    try testing.expectEqual(@as(u5, 16), plain.bo);
+    try testing.expectEqual(@as(u8, 0), plain.flags);
+    try testing.expectEqual(@as(u5, 25), hinted.bo);
+    try testing.expect(unsupportedKey(try decode.decode(0x42000003)) !=
+        unsupportedKey(try decode.decode(0x42200003)));
+}
+
+test "collect records the sample address of an undecoded word" {
+    var forms = [_]u32{ 0x00000000, 0x4e800020 };
     var no_calls = [_]u32{};
     const functions = [_]ppc_analyze.Function{
         .{ .addr = 0x1000, .words = &forms, .calls = &no_calls },
@@ -344,25 +354,6 @@ test "collect keeps branch form details and sample addresses" {
     defer testing.allocator.free(summary.missing);
     defer testing.allocator.free(summary.undecoded);
 
-    try testing.expectEqual(@as(usize, 2), summary.missing.len);
-    var seen_16 = false;
-    var seen_17 = false;
-    for (summary.missing) |entry| {
-        try testing.expectEqualStrings("bc", entry.name);
-        try testing.expectEqual(@as(u64, 1), entry.count);
-        if (entry.bo == 16) {
-            seen_16 = true;
-            try testing.expectEqual(@as(u32, 0x42000003), entry.sample);
-            try testing.expectEqual(@as(u32, 0x1000), entry.addr);
-        } else if (entry.bo == 17) {
-            seen_17 = true;
-            try testing.expectEqual(@as(u32, 0x42200003), entry.sample);
-            try testing.expectEqual(@as(u32, 0x1004), entry.addr);
-        }
-    }
-    try testing.expect(seen_16);
-    try testing.expect(seen_17);
-
     try testing.expectEqual(@as(usize, 1), summary.undecoded.len);
-    try testing.expectEqual(@as(u32, 0x1008), summary.undecoded[0].sample_addr);
+    try testing.expectEqual(@as(u32, 0x1000), summary.undecoded[0].sample_addr);
 }
