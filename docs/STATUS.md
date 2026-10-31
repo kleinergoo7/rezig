@@ -7,7 +7,7 @@ P0 pipeline complete: clean extraction, whole-image measurement, and a 50-functi
 ## Done
 
 - Repository scaffold, Zig 0.17.0 pinned.
-- CLI parsing (`extract`, `analyze`, `coverage`, `imports`, `xex`, `codegen`, `help`).
+- CLI parsing (`extract`, `analyze`, `coverage`, `imports`, `xex`, `codegen`, `help`), with `--elf` input for analyze/coverage/codegen.
 - XDVDFS reader, XEX2 header parser, AES-128-CBC, XEX image decrypt + basic decompress + PE parse.
 - `zig build extract` and `zig build analyze`.
 - Key resolution: `--key`, then `REZIG_XEX_KEY`, then `~/.config/rezig/xex.key`. No key ships
@@ -88,6 +88,28 @@ boot: fault unsupported at 0x0
 
 Most stubs still return without setting `r3`. The next step is real kernel behaviour: memory,
 threads and the XAM calls that return pointers or handles.
+
+## Homebrew targets (2026-10-31)
+
+Two homebrew images were tested outside the repository.
+
+Better16, XEX, devkit/debug key:
+
+- base `0x82000000`, entry `0x83254308`, image `0x1880000`, `.text` rva `0x7A0000` size `0xE0546C`.
+- The execution-info optional header is absent; rezig now accepts that and reports version/title zero.
+- coverage: 92,090 `.pdata` starts, 100,678 functions, 3,374,972 unique instructions =
+  91.82% of `.text`, 97.18% decode, 96.79% emit, 87,680 functions fully emittable (87.08%).
+- boot reaches five imports and stops at `0x83208E28`; that function uses `addic`/`subfe`, which
+  the decoder does not support yet.
+
+ClassiCube, ELF32 PowerPC:
+
+- entry `0x86200`, `.text` size `0xBBE60`, one RWX load segment, `.eh_frame_hdr` present.
+- `--elf` input was added for `analyze`, `coverage` and `codegen`; boot is XEX-only.
+- 3,242 FDE starts from `.eh_frame_hdr`; coverage: 8,007 functions, 176,993 unique
+  instructions = 91.98% of `.text`, 97.89% decode, 97.80% emit, 5,221 functions fully
+  emittable (65.20%).
+- `zig build gate -Delf=<file> -Dslice=50` passes 50 x 64 cases.
 
 ## Conversion
 

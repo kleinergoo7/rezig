@@ -164,7 +164,8 @@ fn decompressBasic(payload: []const u8, out: []u8, blocks: []const header.Block)
         @memset(out[out_pos..][0..zero_size], 0);
         out_pos += zero_size;
     }
-    if (out_pos != out.len) return error.ImageSizeMismatch;
+    // The loader zero-fills pages that the block table omits.
+    @memset(out[out_pos..], 0);
 }
 
 const Pe = struct { base_address: u32, entry_point: u32, sections: []PeSection };
@@ -303,19 +304,23 @@ test "normal compression is refused by name" {
     try testing.expectError(error.UnsupportedCompression, load(testing.allocator, io, path, zero_key));
 }
 
-test "block sum mismatch is an image size mismatch" {
+test "a short block sum is zero-filled to the image size" {
     const io = Io.Threaded.global_single_threaded.io();
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const bytes = try xex_writer.buildFull(testing.allocator, 0, 1);
     defer testing.allocator.free(bytes);
+    std.mem.writeInt(u32, bytes[xex_writer.off.security + 4 ..][0..4], 0x3000, .big);
     std.mem.writeInt(u32, bytes[xex_writer.off.file_format + 16 ..][0..4], 0x800, .big);
 
     var path_buf: [256]u8 = undefined;
     const path = try writeFixture(io, &tmp, "short.xex", bytes, &path_buf);
 
-    try testing.expectError(error.ImageSizeMismatch, load(testing.allocator, io, path, zero_key));
+    var img = try load(testing.allocator, io, path, zero_key);
+    defer img.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, xex_writer.image_size), img.bytes.len);
+    for (img.bytes[0x2800..]) |byte| try testing.expectEqual(@as(u8, 0), byte);
 }
 
 test "missing mz is a bad pe" {

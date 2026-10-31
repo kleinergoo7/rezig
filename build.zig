@@ -77,6 +77,7 @@ const Options = struct {
     key: ?[]const u8,
     tree: ?[]const u8,
     xex: ?[]const u8,
+    elf: ?[]const u8,
     slice: ?[]const u8,
     slice_list: ?[]const u8,
 };
@@ -89,6 +90,7 @@ fn readOptions(b: *std.Build) Options {
         .key = b.option([]const u8, "key", "path to a 16-byte XEX key"),
         .tree = b.option([]const u8, "tree", "extracted game tree"),
         .xex = b.option([]const u8, "xex", "path to a XEX file"),
+        .elf = b.option([]const u8, "elf", "path to an ELF32 PowerPC file"),
         .slice = b.option([]const u8, "slice", "number of functions to select"),
         .slice_list = b.option([]const u8, "slice-list", "frozen address list"),
     };
@@ -107,28 +109,32 @@ fn addExtractStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) vo
 
 fn addAnalyzeStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) void {
     const step = b.step("analyze", "Report the XEX version, entry point and PE sections");
-    if ((opts.tree == null) == (opts.xex == null)) {
-        return failStep(b, step, "exactly one of -Dtree=<dir> or -Dxex=<path>");
+    const sources = @as(u8, @intFromBool(opts.tree != null)) + @intFromBool(opts.xex != null) + @intFromBool(opts.elf != null);
+    if (sources != 1) {
+        return failStep(b, step, "exactly one of -Dtree=<dir>, -Dxex=<path> or -Delf=<path>");
     }
 
     const run = b.addRunArtifact(exe);
     run.addArgs(&.{"analyze"});
     if (opts.tree) |value| run.addArgs(&.{ "--tree", value });
     if (opts.xex) |value| run.addArgs(&.{ "--xex", value });
+    if (opts.elf) |value| run.addArgs(&.{ "--elf", value });
     if (opts.key) |key| run.addArgs(&.{ "--key", key });
     step.dependOn(&run.step);
 }
 
 fn addCoverageStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) void {
     const step = b.step("coverage", "Report decoder and emitter coverage over discovered code");
-    if ((opts.tree == null) == (opts.xex == null)) {
-        return failStep(b, step, "exactly one of -Dtree=<dir> or -Dxex=<path>");
+    const sources = @as(u8, @intFromBool(opts.tree != null)) + @intFromBool(opts.xex != null) + @intFromBool(opts.elf != null);
+    if (sources != 1) {
+        return failStep(b, step, "exactly one of -Dtree=<dir>, -Dxex=<path> or -Delf=<path>");
     }
 
     const run = b.addRunArtifact(exe);
     run.addArgs(&.{"coverage"});
     if (opts.tree) |value| run.addArgs(&.{ "--tree", value });
     if (opts.xex) |value| run.addArgs(&.{ "--xex", value });
+    if (opts.elf) |value| run.addArgs(&.{ "--elf", value });
     if (opts.key) |key| run.addArgs(&.{ "--key", key });
     step.dependOn(&run.step);
 }
@@ -147,14 +153,16 @@ fn addXexStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) void {
 /// Compile gate: regenerate the slice and type-check every emitted function against the real Ctx.
 fn addGateStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) void {
     const step = b.step("gate", "Compile the emitted slice against the runtime");
-    if ((opts.tree == null) == (opts.xex == null)) {
-        return failStep(b, step, "exactly one of -Dtree=<dir> or -Dxex=<path>");
+    const sources = @as(u8, @intFromBool(opts.tree != null)) + @intFromBool(opts.xex != null) + @intFromBool(opts.elf != null);
+    if (sources != 1) {
+        return failStep(b, step, "exactly one of -Dtree=<dir>, -Dxex=<path> or -Delf=<path>");
     }
 
     const codegen_run = b.addRunArtifact(exe);
     codegen_run.addArgs(&.{"codegen"});
     if (opts.tree) |value| codegen_run.addArgs(&.{ "--tree", value });
     if (opts.xex) |value| codegen_run.addArgs(&.{ "--xex", value });
+    if (opts.elf) |value| codegen_run.addArgs(&.{ "--elf", value });
     if (opts.key) |key| codegen_run.addArgs(&.{ "--key", key });
     if (opts.slice) |n| codegen_run.addArgs(&.{ "--slice", n });
     if (opts.slice_list) |path| codegen_run.addArgs(&.{ "--slice-list", path });

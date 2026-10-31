@@ -46,6 +46,7 @@ Verified on a real GTA IV USA disc 1.0:
 | Emitter | integer, single-precision float, VMX subset, branches, loops, direct and indirect calls, tail calls |
 | Differential gate | 50 functions x 64 cases = 3,200 comparisons, all pass |
 | Portability | compiles for x86_64-windows and aarch64-linux |
+| Homebrew inputs | XEX and ELF32 PowerPC; analyze/coverage/codegen, no ELF boot yet |
 
 The gate runs each emitted function and a reference interpreter on identical seeded state and
 compares GPRs, FPRs, CR, XER, LR, CTR, fault kind/address/size, and every byte of a 64 KiB page.
@@ -58,7 +59,9 @@ compares GPRs, FPRs, CR, XER, LR, CTR, fault kind/address/size, and every byte o
 - **VMX/AltiVec breadth.** Only `vor`, `vxor`, `vaddfp`, `lvx` and `stvx` are decoded and
   emitted; the rest of the vector ISA is missing.
 - **Decoder gaps.** 109,326 instruction instances, mostly primary opcodes 04, 05, 03 and 31.
-- **Kernel behaviour.** Imports are logged stubs; boot reaches seventeen imports and then fails.
+- **Kernel behaviour.** Imports are logged stubs; the GTA IV boot reaches seventeen imports
+  and then fails. A second homebrew XEX reaches five imports before an unsupported opcode.
+- **ELF boot.** ELF32 analysis and codegen work, but there is no libxenon syscall layer.
 - **Indirect branches.** `bctr` and `bcctr` are refused; conditional `bclr` returns are lowered.
 
 `docs/STATUS.md` records the detailed numbers, known bugs and limits.

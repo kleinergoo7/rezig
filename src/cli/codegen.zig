@@ -3,10 +3,9 @@
 const std = @import("std");
 const Io = std.Io;
 const parse = @import("parse.zig");
-const image = @import("../xex/image.zig");
+const input = @import("input.zig");
 const analyze = @import("../ppc/analyze.zig");
 const slice = @import("../codegen/slice.zig");
-const pdata_mod = @import("../ppc/pdata.zig");
 const xextool = @import("xextool");
 const emit = @import("../codegen/emit.zig");
 const abi = @import("../codegen/abi.zig");
@@ -22,24 +21,10 @@ pub const header =
     \\
 ;
 
-fn pdataStarts(allocator: std.mem.Allocator, img: anytype) ![]u32 {
-    for (img.sections) |section| {
-        const n = std.mem.indexOfScalar(u8, &section.name, 0) orelse section.name.len;
-        if (!std.mem.eql(u8, section.name[0..n], ".pdata")) continue;
-        return pdata_mod.starts(allocator, img.sectionBytes(section));
-    }
-    return &.{};
-}
-
 pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !void {
-    const xex_path = if (opts.xex) |p|
-        try allocator.dupe(u8, p)
-    else
-        try std.fmt.allocPrint(allocator, "{s}/default.xex", .{opts.tree.?});
-    defer allocator.free(xex_path);
-
-    var img = try image.load(allocator, io, xex_path, key);
-    defer img.deinit(allocator);
+    var loaded = try input.load(allocator, io, opts.tree, opts.xex, opts.elf, key);
+    defer loaded.deinit(allocator);
+    const img = &loaded.image;
 
     const sections = try allocator.alloc(analyze.CodeSection, img.sections.len);
     defer allocator.free(sections);
@@ -50,10 +35,7 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         count += 1;
     }
 
-    const starts = try pdataStarts(allocator, img);
-    defer if (starts.len != 0) allocator.free(starts);
-
-    const found = try analyze.functionsFrom(allocator, sections[0..count], img.entry_point, starts);
+    const found = try analyze.functionsFrom(allocator, sections[0..count], img.entry_point, loaded.seeds);
     defer analyze.freeFunctions(allocator, found);
 
     var picked: []slice.Candidate = undefined;
@@ -87,7 +69,7 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         picked = try list.toOwnedSlice(allocator);
     } else {
         const wanted = opts.slice orelse return error.MissingOption;
-        picked = try slice.select(allocator, sections[0..count], img.entry_point, wanted, starts);
+        picked = try slice.select(allocator, sections[0..count], img.entry_point, wanted, loaded.seeds);
     }
     defer {
         for (picked) |candidate| allocator.free(candidate.words);
@@ -167,31 +149,38 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         var kernel = std.ArrayList(u8).empty;
         defer kernel.deinit(allocator);
         try kernel.appendSlice(allocator, "const std = @import(\"std\");\nconst Ctx = @import(\"rezig_runtime\").ctx.Ctx;\n\nfn logImport(comptime name: []const u8, comptime index: u16, ctx: *const Ctx) void {\n    std.debug.print(\"import {s}[0x{X}] lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X} r6=0x{X}\\n\", .{ name, index, ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5], ctx.gpr[6] });\n}\n\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
-        // Import tables live in the unencrypted header. A key is only needed
-        // when the payload is encrypted; `image.load` already handled that.
-        const import_key = key orelse std.mem.zeroes([16]u8);
-        const raw = Io.Dir.cwd().readFileAlloc(io, xex_path, allocator, .limited(1 << 40)) catch null;
-        if (raw) |bytes| {
-            defer allocator.free(bytes);
-            var xex = xextool.xex.model.Xex.init(allocator);
-            defer xex.deinit();
-            const keys = xextool.xex.keys.Keys.uniform(import_key);
-            if (xextool.xex.reader.readBytes(&xex, bytes, keys)) |_| {} else |_| {}
-            for (xex.import_libraries.items) |lib| {
-                const name = std.mem.sliceTo(&lib.name, 0);
-                var pair_index: usize = 0;
-                while (pair_index + 1 < lib.addresses.len) : (pair_index += 2) {
-                    const thunk = lib.addresses[pair_index + 1];
-                    if (thunk == 0) continue;
-                    // The thunk's first word is 0xTTTT_ORD: high half is a
-                    // type tag, low half the real import ordinal.
-                    var ordinal: u16 = 0;
-                    const off = @as(i64, thunk) - @as(i64, img.base_address);
-                    if (off >= 0 and off + 4 <= img.bytes.len) {
-                        const word = std.mem.readInt(u32, img.bytes[@intCast(off)..][0..4], .big);
-                        ordinal = @truncate(word);
+        if (!loaded.is_elf) {
+            // Import tables live in the unencrypted header. A key is only needed
+            // when the payload is encrypted; `image.load` already handled that.
+            const import_key = key orelse std.mem.zeroes([16]u8);
+            const import_path = if (opts.xex) |p|
+                try allocator.dupe(u8, p)
+            else
+                try std.fmt.allocPrint(allocator, "{s}/default.xex", .{opts.tree.?});
+            defer allocator.free(import_path);
+            const raw = Io.Dir.cwd().readFileAlloc(io, import_path, allocator, .limited(1 << 40)) catch null;
+            if (raw) |bytes| {
+                defer allocator.free(bytes);
+                var xex = xextool.xex.model.Xex.init(allocator);
+                defer xex.deinit();
+                const keys = xextool.xex.keys.Keys.uniform(import_key);
+                if (xextool.xex.reader.readBytes(&xex, bytes, keys)) |_| {} else |_| {}
+                for (xex.import_libraries.items) |lib| {
+                    const name = std.mem.sliceTo(&lib.name, 0);
+                    var pair_index: usize = 0;
+                    while (pair_index + 1 < lib.addresses.len) : (pair_index += 2) {
+                        const thunk = lib.addresses[pair_index + 1];
+                        if (thunk == 0) continue;
+                        // The thunk's first word is 0xTTTT_ORD: high half is a
+                        // type tag, low half the real import ordinal.
+                        var ordinal: u16 = 0;
+                        const off = @as(i64, thunk) - @as(i64, img.base_address);
+                        if (off >= 0 and off + 4 <= img.bytes.len) {
+                            const word = std.mem.readInt(u32, img.bytes[@intCast(off)..][0..4], .big);
+                            ordinal = @truncate(word);
+                        }
+                        try kernelCase(allocator, &kernel, thunk, name, ordinal);
                     }
-                    try kernelCase(allocator, &kernel, thunk, name, ordinal);
                 }
             }
         }

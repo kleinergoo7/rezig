@@ -385,9 +385,9 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
         .ldu => try load64(allocator, out, op.ldu.rt, op.ldu.ra, op.ldu.ds, true),
         .lwa => {
             if (op.lwa.ra == 0) {
-                try out.print(allocator, "    ctx.gpr[{d}] = @as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.load32(0 +% 0x{X:0>8})))));\n", .{ op.lwa.rt, @as(u32, @bitCast(@as(i32, op.lwa.ds))) });
+                try out.print(allocator, "    ctx.gpr[{d}] = @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.load32(0 +% 0x{X:0>8})))))));\n", .{ op.lwa.rt, @as(u32, @bitCast(@as(i32, op.lwa.ds))) });
             } else {
-                try out.print(allocator, "    ctx.gpr[{d}] = @as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.load32(@as(u32, @truncate(ctx.gpr[{d}])) +% 0x{X:0>8})))));\n", .{ op.lwa.rt, op.lwa.ra, @as(u32, @bitCast(@as(i32, op.lwa.ds))) });
+                try out.print(allocator, "    ctx.gpr[{d}] = @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.load32(@as(u32, @truncate(ctx.gpr[{d}])) +% 0x{X:0>8})))))));\n", .{ op.lwa.rt, op.lwa.ra, @as(u32, @bitCast(@as(i32, op.lwa.ds))) });
             }
         },
         .cmpw => try out.print(allocator, "    ctx.setCr32({d}, ctx.gpr[{d}], ctx.gpr[{d}], true);\n", .{ op.cmpw.crf, op.cmpw.ra, op.cmpw.rb }),
@@ -799,6 +799,13 @@ test "record forms update CR0" {
     const rot_text = try function(testing.allocator, &rot, .{ .addr = 0x100 });
     defer testing.allocator.free(rot_text);
     try testing.expect(std.mem.indexOf(u8, rot_text, "ctx.setCr32(0, ctx.gpr[3], 0, true);") != null);
+}
+
+test "lwa closes every conversion" {
+    const words = [_]u32{ 0xe97b0002, 0x4e800020 }; // lwa r11,0(r27)
+    const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "@bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(ctx.load32(@as(u32, @truncate(ctx.gpr[27])) +% 0x00000000)))))))") != null);
 }
 
 test "rldicr uses the six-bit fields" {

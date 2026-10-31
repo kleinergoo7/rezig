@@ -3,11 +3,12 @@
 const std = @import("std");
 
 pub const Extract = struct { iso: []const u8, out: []const u8, key: ?[]const u8 };
-pub const Analyze = struct { tree: ?[]const u8, xex: ?[]const u8, key: ?[]const u8 };
+pub const Analyze = struct { tree: ?[]const u8, xex: ?[]const u8, elf: ?[]const u8, key: ?[]const u8 };
 pub const Xex = struct { in: []const u8, out: []const u8, key: ?[]const u8 };
 pub const Codegen = struct {
     tree: ?[]const u8,
     xex: ?[]const u8,
+    elf: ?[]const u8,
     key: ?[]const u8,
     all: ?bool,
     out: []const u8,
@@ -34,6 +35,7 @@ const Options = struct {
     key: ?[]const u8 = null,
     tree: ?[]const u8 = null,
     xex: ?[]const u8 = null,
+    elf: ?[]const u8 = null,
     slice: ?u32 = null,
     slice_list: ?[]const u8 = null,
 
@@ -90,6 +92,8 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
             try opts.set("tree", value);
         } else if (std.mem.eql(u8, flag, "--xex")) {
             try opts.set("xex", value);
+        } else if (std.mem.eql(u8, flag, "--elf")) {
+            try opts.set("elf", value);
         } else if (std.mem.eql(u8, flag, "--slice")) {
             const n = std.fmt.parseInt(u32, value, 10) catch return error.BadValue;
             try opts.set("slice", n);
@@ -103,40 +107,41 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
     if (std.mem.eql(u8, name, "extract")) {
         const iso = try opts.require("iso");
         const out = try opts.require("out");
-        try opts.rejectUnused(&.{ "in", "tree", "xex", "slice", "slice_list", "all" });
+        try opts.rejectUnused(&.{ "in", "tree", "xex", "elf", "slice", "slice_list", "all" });
         return .{ .extract = .{ .iso = iso, .out = out, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "analyze")) {
         try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list", "all" });
-        const has_tree = opts.tree != null;
-        const has_xex = opts.xex != null;
-        if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
-        return .{ .analyze = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
+        const sources = @as(u32, @intFromBool(opts.tree != null)) + @intFromBool(opts.xex != null) + @intFromBool(opts.elf != null);
+        if (sources == 0) return error.MissingOption;
+        if (sources > 1) return error.BadValue;
+        return .{ .analyze = .{ .tree = opts.tree, .xex = opts.xex, .elf = opts.elf, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "coverage")) {
         try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list", "all" });
-        const has_tree = opts.tree != null;
-        const has_xex = opts.xex != null;
-        if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
-        return .{ .coverage = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
+        const sources = @as(u32, @intFromBool(opts.tree != null)) + @intFromBool(opts.xex != null) + @intFromBool(opts.elf != null);
+        if (sources == 0) return error.MissingOption;
+        if (sources > 1) return error.BadValue;
+        return .{ .coverage = .{ .tree = opts.tree, .xex = opts.xex, .elf = opts.elf, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "xex")) {
         const input = try opts.require("in");
         const out = try opts.require("out");
-        try opts.rejectUnused(&.{ "iso", "tree", "xex", "slice", "slice_list" });
+        try opts.rejectUnused(&.{ "iso", "tree", "xex", "elf", "slice", "slice_list" });
         return .{ .xex_convert = .{ .in = input, .out = out, .key = opts.key } };
     }
     if (std.mem.eql(u8, name, "codegen")) {
         const out = try opts.require("out");
         try opts.rejectUnused(&.{ "iso", "in" });
-        const has_tree = opts.tree != null;
-        const has_xex = opts.xex != null;
-        if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
+        const sources = @as(u32, @intFromBool(opts.tree != null)) + @intFromBool(opts.xex != null) + @intFromBool(opts.elf != null);
+        if (sources == 0) return error.MissingOption;
+        if (sources > 1) return error.BadValue;
         if (opts.slice != null and opts.slice_list != null) return error.BadValue;
         if (opts.slice == null and opts.slice_list == null and (opts.all == null)) return error.MissingOption;
         return .{ .codegen = .{
             .tree = opts.tree,
             .xex = opts.xex,
+            .elf = opts.elf,
             .key = opts.key,
             .all = opts.all,
             .out = out,
@@ -145,11 +150,11 @@ pub fn parse(args: []const [:0]const u8) ParseError!Command {
         } };
     }
     if (std.mem.eql(u8, name, "imports")) {
-        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list", "all" });
+        try opts.rejectUnused(&.{ "iso", "in", "out", "slice", "slice_list", "all", "elf" });
         const has_tree = opts.tree != null;
         const has_xex = opts.xex != null;
         if (has_tree == has_xex) return if (has_tree) error.BadValue else error.MissingOption;
-        return .{ .imports = .{ .tree = opts.tree, .xex = opts.xex, .key = opts.key } };
+        return .{ .imports = .{ .tree = opts.tree, .xex = opts.xex, .elf = null, .key = opts.key } };
     }
     return error.UnknownCommand;
 }
@@ -194,6 +199,11 @@ test "analyze accepts a direct xex and a key" {
     const cmd = try parse(&.{ "rezig", "analyze", "--xex", "a.xex", "--key", "k" });
     try testing.expectEqualStrings("a.xex", cmd.analyze.xex.?);
     try testing.expectEqualStrings("k", cmd.analyze.key.?);
+}
+
+test "analyze accepts an elf input" {
+    const cmd = try parse(&.{ "rezig", "analyze", "--elf", "a.elf" });
+    try testing.expectEqualStrings("a.elf", cmd.analyze.elf.?);
 }
 
 test "analyze needs exactly one input" {

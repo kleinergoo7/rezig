@@ -4,7 +4,7 @@ const std = @import("std");
 const decode = @import("decode.zig");
 
 pub const max_function_insns: u32 = 1024;
-pub const max_functions: u32 = 100_000;
+pub const max_functions: u32 = 500_000;
 
 pub const Error = error{
     OutOfRange,

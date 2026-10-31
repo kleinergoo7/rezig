@@ -24,6 +24,11 @@ pub const usage =
     \\  codegen   Emit Zig source for selected guest functions
     \\  help      Show this message
     \\
+    \\inputs:
+    \\  --tree <dir>   extracted game tree
+    \\  --xex <path>   XEX file
+    \\  --elf <path>   ELF32 PowerPC homebrew file
+    \\
     \\extract options:
     \\  --iso <path>   disc image
     \\  --out <dir>    output game tree

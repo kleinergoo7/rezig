@@ -14,7 +14,6 @@ pub const Error = error{
     Truncated,
     NoOptionalHeaders,
     MissingFileFormatInfo,
-    MissingExecutionInfo,
     MissingEntryPoint,
     MissingImageBase,
     UnsupportedEncryption,
@@ -164,16 +163,26 @@ pub fn parse(allocator: std.mem.Allocator, bytes: []const u8) Error!Header {
         blocks = allocated;
     }
 
-    const exec_offset = execution_offset orelse return error.MissingExecutionInfo;
-    if (@as(u64, exec_offset) + 0x18 > bytes.len) return error.Truncated;
-    const ex = bytes[exec_offset..];
-    const execution = Execution{
-        .media_id = readU32(ex, 0x00),
-        .version = .{ .value = readU32(ex, 0x04) },
-        .base_version = .{ .value = readU32(ex, 0x08) },
-        .title_id = readU32(ex, 0x0C),
-        .disc_number = ex[0x12],
-        .disc_count = ex[0x13],
+    // Homebrew images may omit the execution-info header. Keep the rest of
+    // the image usable with zero version and title metadata.
+    const execution = if (execution_offset) |exec_offset| blk: {
+        if (@as(u64, exec_offset) + 0x18 > bytes.len) return error.Truncated;
+        const ex = bytes[exec_offset..];
+        break :blk Execution{
+            .media_id = readU32(ex, 0x00),
+            .version = .{ .value = readU32(ex, 0x04) },
+            .base_version = .{ .value = readU32(ex, 0x08) },
+            .title_id = readU32(ex, 0x0C),
+            .disc_number = ex[0x12],
+            .disc_count = ex[0x13],
+        };
+    } else Execution{
+        .media_id = 0,
+        .version = .{ .value = 0 },
+        .base_version = .{ .value = 0 },
+        .title_id = 0,
+        .disc_number = 0,
+        .disc_count = 0,
     };
 
     return .{
@@ -274,12 +283,17 @@ test "missing file format info is rejected" {
     try testing.expectError(error.MissingFileFormatInfo, parse(testing.allocator, bytes));
 }
 
-test "missing execution info is rejected" {
+test "missing execution info is allowed" {
     const bytes = try fixture();
     defer testing.allocator.free(bytes);
     const at = xex_writer.off.optional + 3 * 8;
     std.mem.writeInt(u32, bytes[at..][0..4], 0x00040007, .big);
-    try testing.expectError(error.MissingExecutionInfo, parse(testing.allocator, bytes));
+
+    var h = try parse(testing.allocator, bytes);
+    defer h.deinit(testing.allocator);
+    try testing.expectEqual(@as(u32, 0), h.execution.version.value);
+    try testing.expectEqual(@as(u32, 0), h.execution.title_id);
+    try testing.expectEqual(@as(u32, 0), h.execution.media_id);
 }
 
 test "file format offset past the buffer is truncated" {
