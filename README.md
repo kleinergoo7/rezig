@@ -60,7 +60,8 @@ compares GPRs, FPRs, CR, XER, LR, CTR, fault kind/address/size, and every byte o
   emitted; the rest of the vector ISA is missing.
 - **Decoder gaps.** 109,326 instruction instances, mostly primary opcodes 04, 05, 03 and 31.
 - **Kernel behaviour.** Imports are logged stubs; the GTA IV boot reaches seventeen imports
-  and then fails. A second homebrew XEX reaches five imports before an unsupported opcode.
+  and then fails. Better16 and ClassiCube now codegen 100% of discovered functions; Better16
+  compiles the whole image and then fails in recursive runtime dispatch.
 - **ELF boot.** ELF32 analysis and codegen work, but there is no libxenon syscall layer.
 - **Indirect branches.** `bctr` and `bcctr` are refused; conditional `bclr` returns are lowered.
 

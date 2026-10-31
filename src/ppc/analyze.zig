@@ -289,7 +289,7 @@ test "a function without blr reports its address" {
 }
 
 test "a pdata seed whose first word is not code is skipped" {
-    const code = [_]u32{ 0x010001A4, 0x38600001, ret };
+    const code = [_]u32{ 0x44000002, 0x38600001, ret };
     const bytes = try beBytes(testing.allocator, &code);
     defer testing.allocator.free(bytes);
     const sections = [_]CodeSection{.{ .addr = 0x100, .bytes = bytes }};
@@ -346,7 +346,7 @@ test "a tail branch to an unknown address is discovered" {
 }
 
 test "an undecodable word reports its address" {
-    const code = [_]u32{ save, 0x00000001, ret };
+    const code = [_]u32{ save, 0x44000002, ret };
     const bytes = try beBytes(testing.allocator, &code);
     defer testing.allocator.free(bytes);
     const sections = [_]CodeSection{.{ .addr = 0x100, .bytes = bytes }};

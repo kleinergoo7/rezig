@@ -20,6 +20,7 @@ pub const Ctx = struct {
     lr: u32,
     ctr: u32,
     msr: u64,
+    fpscr: u32,
     spr: [1024]u64,
     reserve_addr: u32,
     reserve_valid: bool,
@@ -38,6 +39,7 @@ pub const Ctx = struct {
             .lr = 0,
             .ctr = 0,
             .msr = 0,
+            .fpscr = 0,
             .spr = @splat(0),
             .reserve_addr = 0,
             .reserve_valid = false,
@@ -135,6 +137,14 @@ pub const Ctx = struct {
         return result;
     }
 
+    pub fn addme(self: *Ctx, a: u64) u64 {
+        const carry: u64 = @intFromBool(self.ca());
+        const sum, const carry1 = @addWithOverflow(a, carry);
+        const result, const carry2 = @addWithOverflow(sum, std.math.maxInt(u64));
+        self.setCa(carry1 != 0 or carry2 != 0);
+        return result;
+    }
+
     pub fn addze(self: *Ctx, a: u64) u64 {
         const carry: u64 = @intFromBool(self.ca());
         const result, const overflow = @addWithOverflow(a, carry);
@@ -200,6 +210,18 @@ pub const Ctx = struct {
         return a *% b;
     }
 
+    pub fn mulhd(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        const x: i128 = @as(i64, @bitCast(a));
+        const y: i128 = @as(i64, @bitCast(b));
+        return @truncate(@as(u128, @bitCast((x * y) >> 64)));
+    }
+
+    pub fn mulhdu(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        return @truncate((@as(u128, a) * @as(u128, b)) >> 64);
+    }
+
     pub fn divw(self: *const Ctx, a: u64, b: u64) u64 {
         _ = self;
         const x: i32 = @truncate(@as(i64, @bitCast(a)));
@@ -221,6 +243,15 @@ pub const Ctx = struct {
         return if (b == 0) 0 else a / b;
     }
 
+    pub fn divd(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        const x: i64 = @bitCast(a);
+        const y: i64 = @bitCast(b);
+        if (y == 0) return 0;
+        if (x == std.math.minInt(i64) and y == -1) return a;
+        return @bitCast(@divTrunc(x, y));
+    }
+
     pub fn slw(self: *const Ctx, a: u64, b: u64) u64 {
         _ = self;
         return @as(u32, @truncate(a)) << @intCast(b & 31);
@@ -239,6 +270,12 @@ pub const Ctx = struct {
     pub fn srd(self: *const Ctx, a: u64, b: u64) u64 {
         _ = self;
         return a >> @intCast(b & 63);
+    }
+
+    pub fn srad(self: *const Ctx, a: u64, b: u64) u64 {
+        _ = self;
+        const x: i64 = @bitCast(a);
+        return @bitCast(x >> @intCast(b & 63));
     }
 
     pub fn sradi(self: *const Ctx, a: u64, sh: u6) u64 {
@@ -302,11 +339,47 @@ pub const Ctx = struct {
         return self.load32(addr);
     }
 
+    pub fn ldarx(self: *Ctx, addr: u32) u64 {
+        self.reserve_addr = addr;
+        self.reserve_valid = true;
+        return self.load64(addr);
+    }
+
     pub fn stwcx(self: *Ctx, addr: u32, value: u64) void {
         const success = self.reserve_valid and self.reserve_addr == addr;
         if (success) self.store32(addr, value);
         self.setCr(0, @intFromBool(!success), 0, true);
         self.reserve_valid = false;
+    }
+
+    pub fn stdcx(self: *Ctx, addr: u32, value: u64) void {
+        const success = self.reserve_valid and self.reserve_addr == addr;
+        if (success) self.store64(addr, value);
+        self.setCr(0, @intFromBool(!success), 0, true);
+        self.reserve_valid = false;
+    }
+
+    pub fn fsel(_: *Ctx, a: f64, b: f64, c: f64) f64 {
+        return if (a >= 0 or std.math.isNan(a)) c else b;
+    }
+
+    pub fn lvsl(_: *Ctx, addr: u32) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..16) |i| out[i] = @truncate(i * 8 + (addr & 15));
+        return out;
+    }
+
+    pub fn lvsr(_: *Ctx, addr: u32) [16]u8 {
+        var out: [16]u8 = undefined;
+        for (0..16) |i| out[i] = @truncate((15 - i) * 8 + (addr & 15));
+        return out;
+    }
+
+    pub fn lvehx(self: *Ctx, addr: u32) [16]u8 {
+        var out: [16]u8 = @splat(0);
+        const lane: u32 = (addr >> 1) & 7;
+        std.mem.writeInt(u16, out[lane * 2 ..][0..2], @truncate(self.load16(addr)), .big);
+        return out;
     }
 
     pub fn trap(self: *Ctx, addr: u32) void {
@@ -750,6 +823,7 @@ test "multiply, divide and shift helpers" {
     try std.testing.expectEqual(@as(u64, 0xFFFFFFFE), ctx.mulhwu(0xFFFFFFFF, 0xFFFFFFFF));
     try std.testing.expectEqual(@as(u64, 12), ctx.mulld(3, 4));
     try std.testing.expectEqual(@as(u64, 0xFFFFFFFD), ctx.divw(0xFFFFFFFFFFFFFFF9, 2));
+    try std.testing.expectEqual(@as(u64, 0xFFFFFFFFFFFFFFFD), ctx.divd(0xFFFFFFFFFFFFFFF9, 2));
     try std.testing.expectEqual(@as(u64, 0x7FFFFFFF), ctx.divwu(0xFFFFFFFF, 2));
     try std.testing.expectEqual(@as(u64, 2), ctx.slw(1, 33));
     try std.testing.expectEqual(@as(u64, 1), ctx.srw(0x80000000, 31));

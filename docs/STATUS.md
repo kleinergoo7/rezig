@@ -98,18 +98,40 @@ Better16, XEX, devkit/debug key:
 - base `0x82000000`, entry `0x83254308`, image `0x1880000`, `.text` rva `0x7A0000` size `0xE0546C`.
 - The execution-info optional header is absent; rezig now accepts that and reports version/title zero.
 - coverage: 92,090 `.pdata` starts, 100,678 functions, 3,374,972 unique instructions =
-  91.82% of `.text`, 97.18% decode, 96.79% emit, 87,680 functions fully emittable (87.08%).
-- boot reaches five imports and stops at `0x83208E28`; that function uses `addic`/`subfe`, which
-  the decoder does not support yet.
+  91.82% of `.text`. R1 closed decode and emit to 100.00% of discovered code.
+- boot compiles the whole image and now fails at runtime in recursive dispatch at `0x835A4A8C`.
 
 ClassiCube, ELF32 PowerPC:
 
 - entry `0x86200`, `.text` size `0xBBE60`, one RWX load segment, `.eh_frame_hdr` present.
 - `--elf` input was added for `analyze`, `coverage` and `codegen`; boot is XEX-only.
-- 3,242 FDE starts from `.eh_frame_hdr`; coverage: 8,007 functions, 176,993 unique
-  instructions = 91.98% of `.text`, 97.89% decode, 97.80% emit, 5,221 functions fully
-  emittable (65.20%).
+- 3,242 FDE starts from `.eh_frame_hdr`; coverage: 8,011 functions, 176,993 unique
+  instructions = 91.98% of `.text`. R1 closed decode and emit to 100.00%.
 - `zig build gate -Delf=<file> -Dslice=50` passes 50 x 64 cases.
+
+## R1 codegen completeness (2026-10-31)
+
+Both homebrew targets now decode, emit and compile every discovered function.
+
+Better16:
+
+- 100,678 functions, 3,480,190 instruction instances.
+- decode 100.00%, emit 100.00%, fully emittable 100,678 (100.00%).
+- `codegen --all`: 100,678 functions in 101 chunks, 479 MB, about 1m54s.
+- `zig build boot` compiles the whole image. The run then segfaults in recursive
+  dispatch at `0x835A4A8C`; that is an R2 runtime bug, not a codegen gap.
+
+ClassiCube:
+
+- 8,011 functions, 612,011 instruction instances.
+- decode 100.00%, emit 100.00%, fully emittable 8,011 (100.00%).
+- `codegen --all`: 8,011 functions in 9 chunks, 84 MB, about 3s.
+
+Discovery now drops `.pdata` seeds whose first word is not an instruction.
+Reserved primary 0/5 words, unlisted VMX encodings and a few reserved POWER
+forms lower as padding. The padding shortcut is documented in
+`src/ppc/decode.zig`; replace it with CFG blocks when data-bearing functions
+are verified.
 
 ## Conversion
 

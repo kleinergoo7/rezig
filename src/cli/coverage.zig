@@ -307,7 +307,7 @@ fn percent100(part: u64, whole: u64) u64 {
 const testing = std.testing;
 
 test "collect separates emitted instructions from decoder gaps" {
-    var mixed = [_]u32{ 0x60000000, 0xfc22182b, 0x00000001, 0x4e800020 };
+    var mixed = [_]u32{ 0x60000000, 0xfc22182b, 0x44000002, 0x4e800020 };
     var clean = [_]u32{ 0x60000000, 0x4e800020 };
     var no_calls = [_]u32{};
     const functions = [_]ppc_analyze.Function{
@@ -344,7 +344,7 @@ test "branch forms keep their BO, BI and flags" {
 }
 
 test "collect records the sample address of an undecoded word" {
-    var forms = [_]u32{ 0x00000001, 0x4e800020 };
+    var forms = [_]u32{ 0x44000002, 0x4e800020 };
     var no_calls = [_]u32{};
     const functions = [_]ppc_analyze.Function{
         .{ .addr = 0x1000, .words = &forms, .calls = &no_calls },
