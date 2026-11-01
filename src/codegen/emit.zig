@@ -1449,6 +1449,13 @@ test "addic and subfe lower through the carry helpers" {
     try testing.expect(std.mem.indexOf(u8, text, "ctx.subfe(ctx.gpr[4], ctx.gpr[5])") != null);
 }
 
+test "ld lowers with the byte offset" {
+    const words = [_]u32{ 0xE8C40008, 0x4e800020 }; // ld r6,8(r4)
+    const text = try function(testing.allocator, &words, .{ .addr = 0x100 });
+    defer testing.allocator.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "+% 0x00000008") != null);
+}
+
 test "lwa closes every conversion" {
     const words = [_]u32{ 0xe97b0002, 0x4e800020 }; // lwa r11,0(r27)
     const text = try function(testing.allocator, &words, .{ .addr = 0x100 });

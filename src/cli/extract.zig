@@ -223,8 +223,8 @@ fn copyEntry(
 }
 
 const testing = std.testing;
-const iso_writer = @import("../fixtures/iso_writer.zig");
-const xex_writer = @import("../fixtures/xex_writer.zig");
+const iso_writer = @import("../disc/iso_writer.zig");
+const xex_writer = @import("../xex/xex_writer.zig");
 
 fn tmpPath(tmp: *testing.TmpDir, buf: []u8, name: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buf, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, name });

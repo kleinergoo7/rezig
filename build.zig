@@ -62,6 +62,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(interp_tests).step);
 
     const opts = readOptions(b);
+    addTraceTmpStep(b, target, optimize);
     addExtractStep(b, exe, opts);
     addAnalyzeStep(b, exe, opts);
     addCoverageStep(b, exe, opts);
@@ -81,6 +82,49 @@ const Options = struct {
     slice: ?[]const u8,
     slice_list: ?[]const u8,
 };
+
+/// TEMPORARY pre-import hang tracer. Delete with src/tmp_trace.zig.
+fn addTraceTmpStep(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) void {
+    const ppc_module = b.createModule(.{
+        .root_source_file = b.path("src/ppc/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const runtime_module = b.createModule(.{
+        .root_source_file = b.path("src/runtime/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const interp_module = b.createModule(.{
+        .root_source_file = b.path("src/interp/interp.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "rezig_ppc", .module = ppc_module },
+            .{ .name = "rezig_runtime", .module = runtime_module },
+        },
+    });
+    const xex_module = b.createModule(.{
+        .root_source_file = b.path("src/xex/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const trace_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tmp_trace.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "rezig_ppc", .module = ppc_module },
+                .{ .name = "rezig_runtime", .module = runtime_module },
+                .{ .name = "rezig_interp", .module = interp_module },
+                .{ .name = "rezig_xex", .module = xex_module },
+            },
+        }),
+    });
+    const step = b.step("trace-tmp", "TEMPORARY: trace the Better16 entry path");
+    step.dependOn(&b.addRunArtifact(trace_tests).step);
+}
 
 /// Build options are global, so every step reads from this one table.
 fn readOptions(b: *std.Build) Options {

@@ -14,6 +14,7 @@ pub const CmpForm = struct { crf: u3, ra: u8, imm: i16 };
 pub const CmpLForm = struct { crf: u3, ra: u8, imm: u16 };
 pub const CmpXForm = struct { crf: u3, ra: u8, rb: u8 };
 pub const DSForm = struct { rt: u8, ra: u8, ds: i16 };
+/// DS-form byte offset: the 14-bit D field shifted left by 2 (D||0b00).
 pub const XForm = struct { rt: u8, ra: u8, rb: u8, rc: bool = false };
 pub const ShiftForm = struct { ra: u8, rs: u8, sh: u6, rc: bool = false };
 pub const RotForm = struct { ra: u8, rs: u8, sh: u5, mb: u5, me: u5, rc: bool = false };
@@ -692,8 +693,9 @@ fn lBit(word: u32) u1 {
 
 fn dsForm(word: u32) DSForm {
     const raw: i32 = @as(i32, @bitCast(word & 0xFFFC)) >> 2;
-    const ds: i16 = if (raw & 0x2000 != 0) @intCast(raw - 0x4000) else @intCast(raw);
-    return .{ .rt = rt(word), .ra = ra(word), .ds = ds };
+    const field: i16 = if (raw & 0x2000 != 0) @intCast(raw - 0x4000) else @intCast(raw);
+    // The D field counts 4-byte units; the effective address uses bytes.
+    return .{ .rt = rt(word), .ra = ra(word), .ds = field * 4 };
 }
 
 fn bi(word: u32) u5 {
@@ -929,6 +931,13 @@ test "integer and system encodings decode" {
     try expectDecode(0x7D405828, .{ .lwarx = .{ .rt = 10, .ra = 0, .rb = 11 } });
     try expectDecode(0x7D40592D, .{ .stwcx = .{ .rt = 10, .ra = 0, .rb = 11, .rc = true } });
     try expectDecode(0x7D920120, .{ .mtocrf = .{ .rt = 12, .crm = 0x20 } });
+}
+
+test "ds-form stores the byte offset, not the field" {
+    // ld r6,8(r4): D field is 2, effective address is r4+8.
+    try expectDecode(0xE8C40008, .{ .ld = .{ .rt = 6, .ra = 4, .ds = 8 } });
+    // stdu r1,-96(r1): D field is -24, effective address is r1-96.
+    try expectDecode(0xF821FFA1, .{ .stdu = .{ .rt = 1, .ra = 1, .ds = -96 } });
 }
 
 test "unknown words are refused" {

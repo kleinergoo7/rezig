@@ -239,7 +239,7 @@ fn parsePe(allocator: std.mem.Allocator, bytes: []const u8, encrypted: bool) Err
 }
 
 const testing = std.testing;
-const xex_writer = @import("../fixtures/xex_writer.zig");
+const xex_writer = @import("xex_writer.zig");
 
 const zero_key: [16]u8 = std.mem.zeroes([16]u8);
 

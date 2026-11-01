@@ -11,6 +11,17 @@ pub const Error = error{ Unsupported, StepLimit, InvalidUpdate, BranchOutOfRange
 
 pub const max_steps: u32 = 1_048_576;
 
+/// Temporary boot-path tracer (removed after the pre-import hang is fixed).
+/// When enabled, records the last traced pcs in a ring.
+pub var dbg_on: bool = false;
+pub var dbg_ring: [512]u32 = @splat(0);
+pub var dbg_pos: usize = 0;
+pub var dbg_total: u64 = 0;
+pub var dbg_calls: [512]u32 = @splat(0);
+pub var dbg_call_pos: usize = 0;
+// TEMP-TRACE: first pc where r1 leaves the image mapping.
+pub var dbg_r1_bad: bool = false;
+
 pub const Entry = struct { addr: u32, words: []const u32 };
 pub const Table = []const Entry;
 
@@ -27,6 +38,10 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
     }
     ctx.depth += 1;
     defer ctx.depth -= 1;
+    if (dbg_on) {
+        dbg_calls[dbg_call_pos % dbg_calls.len] = entry_addr;
+        dbg_call_pos +%= 1;
+    }
     var steps: u32 = 0;
     var i: usize = 0;
     while (i < words.len) {
@@ -39,11 +54,29 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
 
         const insn = decode.decode(words[i]) catch return error.Unsupported;
         const cur = entry_addr +% @as(u32, @intCast(i)) * 4;
+        if (dbg_on) {
+            dbg_ring[dbg_pos % dbg_ring.len] = cur;
+            dbg_pos +%= 1;
+            dbg_total += 1;
+            if (!dbg_r1_bad and ctx.gpr[1] < 0x82000000) {
+                dbg_r1_bad = true;
+                std.debug.print("TEMP r1 left image at pc=0x{X} r1=0x{X} lr=0x{X} depth={d}\n", .{ cur, ctx.gpr[1], ctx.lr, ctx.depth });
+            }
+        }
+        const r1_before: u64 = ctx.gpr[31];
         switch (insn) {
             .blr => return,
             .bl => |f| {
                 const target = if (f.absolute) f.target else cur +% f.target;
                 ctx.lr = cur +% 4;
+                // TEMP-TRACE: dump the exception record on RtlRaiseException calls.
+                if (dbg_on and target == 0x835A4BCC) {
+                    std.debug.print("TEMP raise lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X}\n", .{ ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5] });
+                    var k: u32 = 0;
+                    while (k < 8) : (k += 1) {
+                        std.debug.print("TEMP rec+{d} = 0x{X}\n", .{ k * 4, ctx.load32(@as(u32, @truncate(ctx.gpr[3])) +% k * 4) });
+                    }
+                }
                 const callee = lookup(table, target) orelse {
                     ctx.fault = .{ .kind = .unsupported, .addr = target };
                     return;
@@ -566,6 +599,10 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 return;
             },
         }
+        // TEMP-TRACE: catch the exact instruction that corrupts r1.
+        if (dbg_on and !dbg_r1_bad and r1_before >= 0x82000000 and ctx.gpr[31] != r1_before) {
+            std.debug.print("TEMP r31 write at pc=0x{X} 0x{X} -> 0x{X} lr=0x{X} depth={d}\n", .{ cur, r1_before, ctx.gpr[31], ctx.lr, ctx.depth });
+        }
         i += 1;
     }
 }
@@ -691,6 +728,16 @@ test "addic carry feeds subfe" {
     try runWords(&ctx, &.{ 0x30630001, 0x7cc42910, 0x4e800020 }); // addic r3,r3,1; subfe r6,r4,r5
     try testing.expectEqual(@as(u64, 0), ctx.gpr[3]);
     try testing.expectEqual(@as(u64, 1), ctx.gpr[6]);
+}
+
+test "ds-form loads use byte offsets" {
+    var buf: [64]u8 = @splat(0);
+    var ctx = ctx_mod.Ctx.init(.{ .base = 0x1000, .data = &buf });
+    ctx.gpr[4] = 0x1000;
+    ctx.store64(0x1008, 0x1122334455667788);
+    // ld r6,8(r4)
+    try runWords(&ctx, &.{ 0xE8C40008, 0x4e800020 });
+    try testing.expectEqual(@as(u64, 0x1122334455667788), ctx.gpr[6]);
 }
 
 test "loads and stores go through the faulting memory helpers" {
