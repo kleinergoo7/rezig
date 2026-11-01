@@ -126,3 +126,24 @@ test "emitted functions match the interpreter" {
 
     std.debug.print("{d} functions x 64 cases: PASS ({d} cases)\n", .{ slice.functions.len, cases });
 }
+
+test "an exhausted budget halts both implementations" {
+    const f = slice.functions[0];
+    const table = [_]interp.Entry{.{ .addr = f.addr, .words = f.words }};
+
+    var page_a: [page_size]u8 = @splat(0);
+    var page_b: [page_size]u8 = @splat(0);
+    var ctx_a = Ctx.init(.{ .base = page_base, .data = &page_a });
+    var ctx_b = Ctx.init(.{ .base = page_base, .data = &page_b });
+    // One instruction of budget: the first step exhausts it.
+    ctx_a.budget = 1;
+    ctx_b.budget = 1;
+
+    try interp.runTable(&ctx_a, f.addr, f.words, &table);
+    _ = slice.dispatch(f.addr, &ctx_b);
+
+    try std.testing.expect(ctx_a.halted);
+    try std.testing.expect(ctx_b.halted);
+    try std.testing.expectEqual(@as(u32, 0), ctx_a.budget);
+    try std.testing.expectEqual(@as(u32, 0), ctx_b.budget);
+}

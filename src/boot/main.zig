@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
     });
 
     const handled = slice.dispatch(img.entry_point, &ctx);
-    std.debug.print("boot: dispatch returned {} fault {s} at 0x{X} lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X} budget={d} depth={d}\n", .{
-        handled, @tagName(ctx.fault.kind), ctx.fault.addr, ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5], ctx.budget, ctx.depth,
+    std.debug.print("boot: dispatch returned {} fault {s} at 0x{X} lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X} budget={d} halted={} depth={d}\n", .{
+        handled, @tagName(ctx.fault.kind), ctx.fault.addr, ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5], ctx.budget, ctx.halted, ctx.depth,
     });
 }

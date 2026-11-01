@@ -11,17 +11,6 @@ pub const Error = error{ Unsupported, StepLimit, InvalidUpdate, BranchOutOfRange
 
 pub const max_steps: u32 = 1_048_576;
 
-/// Temporary boot-path tracer (removed after the pre-import hang is fixed).
-/// When enabled, records the last traced pcs in a ring.
-pub var dbg_on: bool = false;
-pub var dbg_ring: [512]u32 = @splat(0);
-pub var dbg_pos: usize = 0;
-pub var dbg_total: u64 = 0;
-pub var dbg_calls: [512]u32 = @splat(0);
-pub var dbg_call_pos: usize = 0;
-// TEMP-TRACE: first pc where r1 leaves the image mapping.
-pub var dbg_r1_bad: bool = false;
-
 pub const Entry = struct { addr: u32, words: []const u32 };
 pub const Table = []const Entry;
 
@@ -32,59 +21,34 @@ pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
 /// Runs `words` starting at `start`, resolving `bl` through `table`. Recursion
 /// mirrors the generated code's Zig call stack.
 pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: Table) Error!void {
+    if (ctx.halted) return;
     if (ctx.depth >= ctx_mod.Ctx.max_call_depth) {
         ctx.fault = .{ .kind = .recursion, .addr = entry_addr };
         return;
     }
     ctx.depth += 1;
     defer ctx.depth -= 1;
-    if (dbg_on) {
-        dbg_calls[dbg_call_pos % dbg_calls.len] = entry_addr;
-        dbg_call_pos +%= 1;
-        // TEMP-TRACE: dump the pool-init arguments at the spin loop entry.
-        if (entry_addr == 0x83492C90) {
-            std.debug.print("TEMP spin r29=0x{X} r30=0x{X} r27=0x{X} depth={d}\n", .{ ctx.gpr[29], ctx.gpr[30], ctx.gpr[27], ctx.depth });
-            std.debug.print("TEMP mem[r30+8]=0x{X} mem[r30+C]=0x{X}\n", .{
-                ctx.load32(@as(u32, @truncate(ctx.gpr[30])) +% 8),
-                ctx.load32(@as(u32, @truncate(ctx.gpr[30])) +% 12),
-            });
-        }
-    }
     var steps: u32 = 0;
     var i: usize = 0;
     while (i < words.len) {
+        if (ctx.halted) return;
         if (ctx.budget != 0) {
             ctx.budget -= 1;
-            if (ctx.budget == 0) return;
+            if (ctx.budget == 0) {
+                ctx.halted = true;
+                return;
+            }
         }
         steps += 1;
         if (steps > max_steps) return error.StepLimit;
 
         const insn = decode.decode(words[i]) catch return error.Unsupported;
         const cur = entry_addr +% @as(u32, @intCast(i)) * 4;
-        if (dbg_on) {
-            dbg_ring[dbg_pos % dbg_ring.len] = cur;
-            dbg_pos +%= 1;
-            dbg_total += 1;
-            if (!dbg_r1_bad and ctx.gpr[1] < 0x82000000) {
-                dbg_r1_bad = true;
-                std.debug.print("TEMP r1 left image at pc=0x{X} r1=0x{X} lr=0x{X} depth={d}\n", .{ cur, ctx.gpr[1], ctx.lr, ctx.depth });
-            }
-        }
-        const r1_before: u64 = ctx.gpr[31];
         switch (insn) {
             .blr => return,
             .bl => |f| {
                 const target = if (f.absolute) f.target else cur +% f.target;
                 ctx.lr = cur +% 4;
-                // TEMP-TRACE: dump the exception record on RtlRaiseException calls.
-                if (dbg_on and target == 0x835A4BCC) {
-                    std.debug.print("TEMP raise lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X}\n", .{ ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5] });
-                    var k: u32 = 0;
-                    while (k < 8) : (k += 1) {
-                        std.debug.print("TEMP rec+{d} = 0x{X}\n", .{ k * 4, ctx.load32(@as(u32, @truncate(ctx.gpr[3])) +% k * 4) });
-                    }
-                }
                 const callee = lookup(table, target) orelse {
                     ctx.fault = .{ .kind = .unsupported, .addr = target };
                     return;
@@ -606,13 +570,6 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 }
                 return;
             },
-        }
-        // TEMP-TRACE: catch the exact instruction that corrupts r1.
-        if (dbg_on and !dbg_r1_bad and r1_before >= 0x82000000 and ctx.gpr[31] != r1_before) {
-            std.debug.print("TEMP r31 write at pc=0x{X} 0x{X} -> 0x{X} lr=0x{X} depth={d}\n", .{ cur, r1_before, ctx.gpr[31], ctx.lr, ctx.depth });
-        }
-        if (dbg_on and cur == 0x834AD8C0) {
-            std.debug.print("TEMP at 0x834AD8C0 r29=0x{X} r30=0x{X} r27=0x{X} lr=0x{X}\n", .{ ctx.gpr[29], ctx.gpr[30], ctx.gpr[27], ctx.lr });
         }
         i += 1;
     }

@@ -27,6 +27,9 @@ pub const Ctx = struct {
     depth: u32,
     /// Instruction budget for generated code. `0` means unlimited.
     budget: u32,
+    /// Set when the budget runs out, so every caller unwinds instead of
+    /// continuing with an exhausted budget.
+    halted: bool,
     mem: memory.Memory,
     fault: Fault,
 
@@ -48,6 +51,7 @@ pub const Ctx = struct {
             .reserve_valid = false,
             .depth = 0,
             .budget = 0,
+            .halted = false,
             .mem = mem,
             .fault = .{},
         };

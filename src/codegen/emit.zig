@@ -298,13 +298,13 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
     try out.print(allocator, "pub fn {s}(ctx: *Ctx) callconv(.c) void {{\n", .{
         abi.fnName(opts.addr, &name_buf),
     });
-    try out.print(allocator, "    if (ctx.depth >= Ctx.max_call_depth) {{\n        ctx.fault = .{{ .kind = .recursion, .addr = 0x{X} }};\n        return;\n    }}\n    ctx.depth += 1;\n    defer ctx.depth -= 1;\n", .{opts.addr});
+    try out.print(allocator, "    if (ctx.depth >= Ctx.max_call_depth) {{\n        ctx.fault = .{{ .kind = .recursion, .addr = 0x{X} }};\n        return;\n    }}\n    if (ctx.halted) return;\n    ctx.depth += 1;\n    defer ctx.depth -= 1;\n", .{opts.addr});
 
     if (!has_branch) {
         for (words, 0..) |word, i| {
             const addr = base + @as(u32, @intCast(i)) * 4;
             try out.print(allocator, "    // 0x{X:0>8}\n", .{addr});
-            try out.appendSlice(allocator, "    if (ctx.budget != 0) {\n        ctx.budget -= 1;\n        if (ctx.budget == 0) return;\n    }\n");
+            try out.appendSlice(allocator, "    if (ctx.halted) return;\n    if (ctx.budget != 0) {\n        ctx.budget -= 1;\n        if (ctx.budget == 0) {\n            ctx.halted = true;\n            return;\n        }\n    }\n");
             const op = ppc.decode.decode(word) catch return error.UnsupportedOpcode;
             if (op == .blr) {
                 try out.appendSlice(allocator, "    return;\n");
@@ -319,7 +319,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
     try out.print(allocator, "    var pc: u32 = 0x{X};\n", .{base});
     try out.appendSlice(allocator, "    _ = &pc;\n");
     try out.appendSlice(allocator, "    while (true) {\n");
-    try out.appendSlice(allocator, "        if (ctx.budget != 0) {\n            ctx.budget -= 1;\n            if (ctx.budget == 0) return;\n        }\n");
+    try out.appendSlice(allocator, "        if (ctx.halted) return;\n        if (ctx.budget != 0) {\n            ctx.budget -= 1;\n            if (ctx.budget == 0) {\n                ctx.halted = true;\n                return;\n            }\n        }\n");
     try out.appendSlice(allocator, "        switch (pc) {\n");
 
     for (words, 0..) |word, i| {
@@ -1240,24 +1240,37 @@ test "golden function" {
         \\        ctx.fault = .{ .kind = .recursion, .addr = 0x100 };
         \\        return;
         \\    }
+        \\    if (ctx.halted) return;
         \\    ctx.depth += 1;
         \\    defer ctx.depth -= 1;
         \\    // 0x00000100
+        \\    if (ctx.halted) return;
         \\    if (ctx.budget != 0) {
         \\        ctx.budget -= 1;
-        \\        if (ctx.budget == 0) return;
+        \\        if (ctx.budget == 0) {
+        \\            ctx.halted = true;
+        \\            return;
+        \\        }
         \\    }
         \\    ctx.gpr[3] = 0x0000000000000001;
         \\    // 0x00000104
+        \\    if (ctx.halted) return;
         \\    if (ctx.budget != 0) {
         \\        ctx.budget -= 1;
-        \\        if (ctx.budget == 0) return;
+        \\        if (ctx.budget == 0) {
+        \\            ctx.halted = true;
+        \\            return;
+        \\        }
         \\    }
         \\    ctx.store32(@as(u32, @truncate(ctx.gpr[11])) +% 0x00000014, ctx.gpr[10]);
         \\    // 0x00000108
+        \\    if (ctx.halted) return;
         \\    if (ctx.budget != 0) {
         \\        ctx.budget -= 1;
-        \\        if (ctx.budget == 0) return;
+        \\        if (ctx.budget == 0) {
+        \\            ctx.halted = true;
+        \\            return;
+        \\        }
         \\    }
         \\    return;
         \\}
