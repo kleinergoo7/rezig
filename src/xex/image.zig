@@ -47,9 +47,12 @@ pub const Image = struct {
 
     /// A section may extend past the stored image; the missing tail is zero-filled by the guest.
     pub fn sectionBytes(self: *const Image, section: PeSection) []const u8 {
+        // Safe: u32 -> usize widens without truncation, and `start` is
+        // bounds-checked against bytes.len on the next line before slicing.
         const start: usize = section.virtual_address;
         if (start >= self.bytes.len) return &.{};
         const available = self.bytes.len - start;
+        // Safe: min with the checked `available` keeps the slice in bounds.
         const size = @min(@as(usize, section.virtual_size), available);
         return self.bytes[start..][0..size];
     }

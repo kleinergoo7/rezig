@@ -179,7 +179,10 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
                 var xex = xextool.xex.model.Xex.init(allocator);
                 defer xex.deinit();
                 const keys = xextool.xex.keys.Keys.uniform(import_key);
-                if (xextool.xex.reader.readBytes(&xex, bytes, keys)) |_| {} else |_| {}
+                _ = xextool.xex.reader.readBytes(&xex, bytes, keys) catch |e| {
+                    std.debug.print("codegen: import table of {s} unreadable: {s}\n", .{ import_path, @errorName(e) });
+                    return e;
+                };
                 for (xex.import_libraries.items) |lib| {
                     const name = std.mem.sliceTo(&lib.name, 0);
                     var pair_index: usize = 0;

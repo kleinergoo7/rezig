@@ -61,8 +61,9 @@ pub const VSplatForm = struct { vd: u8, simm: i5 };
 pub const Instruction = union(enum) {
     /// Zero words inside a `.pdata` bound are linker padding. Execution must
     /// never reach them; lowering them as a no-op keeps the body contiguous.
-    /// shortcut: padding is not proven unreachable, replace with CFG blocks
-    /// when data-bearing functions are verified.
+    /// WORKAROUND: padding is not proven unreachable; replace with CFG blocks
+    /// when data-bearing functions are verified. Triggers on every zero word
+    /// inside a `.pdata`-bounded function body.
     padding,
     addi: DForm,
     addis: DForm,
@@ -393,7 +394,9 @@ pub fn decode(word: u32) Error!Instruction {
         },
         63 => try decodeAForm(word, 63),
         // Unlisted VMX encodings in these images are POWER8/data words.
-        // shortcut: a real VMX form not listed here also becomes padding.
+        // WORKAROUND: a real VMX form not listed here also becomes padding.
+        // Triggers on any primary-4 word decodeVForm rejects; logged by
+        // coverage as padding, not as an undecoded form.
         4 => decodeVForm(word) catch .padding,
         else => error.Unsupported,
     };

@@ -75,8 +75,9 @@ pub fn functionsFrom(
         // A `.pdata` seed can point at linker padding, an import thunk or a
         // data table left by a removed function. Real code starts with an
         // instruction the decoder knows.
-        // shortcut: a real function starting with a still-unsupported opcode
+        // WORKAROUND: a real function starting with a still-unsupported opcode
         // is dropped too; add that opcode before trusting this filter.
+        // Triggers per dropped seed; coverage reports the function count drop.
         if (words.len == 0) {
             allocator.free(words);
             continue;

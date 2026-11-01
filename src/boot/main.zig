@@ -7,6 +7,12 @@ const aes = @import("rezig_image").aes;
 const Ctx = @import("rezig_runtime").ctx.Ctx;
 const slice = @import("slice");
 
+/// Guest instructions per boot run before the harness stops and reports.
+/// Large enough for init chains, small enough to bound a spin loop.
+const boot_budget: u32 = 1_000_000;
+/// Bytes reserved below the image end for the initial guest stack.
+const stack_reserve: u32 = 0x100;
+
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const args = try init.minimal.args.toSlice(gpa);
@@ -28,8 +34,10 @@ pub fn main(init: std.process.Init) !void {
     defer img.deinit(gpa);
 
     var ctx = Ctx.init(.{ .base = img.base_address, .data = img.bytes });
-    ctx.gpr[1] = img.base_address + @as(u32, @intCast(img.bytes.len)) - 0x100;
-    ctx.budget = 1_000_000;
+    // Stack top 256 bytes below the image end, matching the XEX loader.
+    ctx.gpr[1] = img.base_address + @as(u32, @intCast(img.bytes.len)) - stack_reserve;
+    ctx.budget = boot_budget;
+    ctx.budget = boot_budget;
 
     std.debug.print("boot: base 0x{X} entry 0x{X} size 0x{X}\n", .{
         img.base_address, img.entry_point, img.bytes.len,

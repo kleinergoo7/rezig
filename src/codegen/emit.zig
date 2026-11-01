@@ -507,7 +507,7 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
                 .vrlw => |v| v,
                 .vcmpequb => |v| v,
                 .vcmpgtub => |v| v,
-                else => unreachable,
+                else => return error.UnsupportedOpcode,
             };
             const name = @tagName(std.meta.activeTag(op));
             try out.print(allocator, "    ctx.vmx[{d}] = ctx.{s}(ctx.vmx[{d}], ctx.vmx[{d}]);\n", .{ f.vd, name, f.va, f.vb });
@@ -652,7 +652,7 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
                 .addze => |f| .{ f.rt, f.ra, f.rb, f.rc, "addze" },
                 .addme => |f| .{ f.rt, f.ra, f.rb, f.rc, "addme" },
                 .neg => |f| .{ f.rt, f.ra, f.rb, f.rc, "neg" },
-                else => unreachable,
+                else => return error.UnsupportedOpcode,
             };
             if (std.mem.eql(u8, name, "addze") or std.mem.eql(u8, name, "addme") or std.mem.eql(u8, name, "neg")) {
                 try out.print(allocator, "    ctx.gpr[{d}] = ctx.{s}(ctx.gpr[{d}]);\n", .{ rt, name, ra });
@@ -674,7 +674,7 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
                 .divwu => |v| v,
                 .divd => |v| v,
                 .divdu => |v| v,
-                else => unreachable,
+                else => return error.UnsupportedOpcode,
             };
             const name = @tagName(std.meta.activeTag(op));
             try out.print(allocator, "    ctx.gpr[{d}] = ctx.{s}(ctx.gpr[{d}], ctx.gpr[{d}]);\n", .{ f.rt, name, f.ra, f.rb });
@@ -687,7 +687,7 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
                 .sld => |v| v,
                 .srd => |v| v,
                 .srad => |v| v,
-                else => unreachable,
+                else => return error.UnsupportedOpcode,
             };
             try out.print(allocator, "    ctx.gpr[{d}] = ctx.{s}(ctx.gpr[{d}], ctx.gpr[{d}]);\n", .{
                 f.ra, @tagName(std.meta.activeTag(op)), f.rt, f.rb,
@@ -746,7 +746,7 @@ fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: 
             const rt = switch (op) {
                 .mtmsr => |f| f.rt,
                 .mtmsrd => |f| f.rt,
-                else => unreachable,
+                else => return error.UnsupportedOpcode,
             };
             try out.print(allocator, "    ctx.msr = ctx.gpr[{d}];\n", .{rt});
         },
@@ -871,7 +871,7 @@ fn load(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, comptim
         .lbz => |f| .{ f.rt, f.ra, f.imm },
         .lbzu => |f| .{ f.rt, f.ra, f.imm },
         .lhzu => |f| .{ f.rt, f.ra, f.imm },
-        else => unreachable,
+        else => return error.UnsupportedOpcode,
     };
     try printAddr(allocator, out, size * 8, "load", true, rt, ra, imm, update);
 }
@@ -883,7 +883,7 @@ fn store(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, update
         .stb => |f| .{ f.rt, f.ra, f.imm, 8 },
         .stbu => |f| .{ f.rt, f.ra, f.imm, 8 },
         .sthu => |f| .{ f.rt, f.ra, f.imm, 16 },
-        else => unreachable,
+        else => return error.UnsupportedOpcode,
     };
     try printAddr(allocator, out, size, "store", false, rt, ra, imm, update);
 }

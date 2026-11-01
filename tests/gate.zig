@@ -9,6 +9,9 @@ const Ctx = runtime.ctx.Ctx;
 
 const page_size: usize = 64 * 1024;
 const page_base: u32 = 0x10000000;
+/// Guest instructions per differential case. Small enough to keep deep call
+/// chains inside the host stack; long loops report StepLimit instead of hanging.
+const gate_budget: u32 = 16_384;
 
 fn splitmix(state: *u64) u64 {
     state.* +%= 0x9E3779B97F4A7C15;
@@ -41,8 +44,8 @@ test "emitted functions match the interpreter" {
 
             var ctx_a = Ctx.init(.{ .base = page_base, .data = &page_a });
             var ctx_b = Ctx.init(.{ .base = page_base, .data = &page_b });
-            ctx_a.budget = 16_384;
-            ctx_b.budget = 16_384;
+            ctx_a.budget = gate_budget;
+            ctx_b.budget = gate_budget;
 
             var regs = seed ^ 0xA5A5_5A5A;
             for (&ctx_a.gpr) |*g| g.* = splitmix(&regs);

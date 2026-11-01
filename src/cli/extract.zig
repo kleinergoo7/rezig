@@ -77,8 +77,9 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !S
     defer if (existing) |*m| m.deinit(allocator);
 
     const xex_version = [4]u16{ version.major(), version.minor(), version.build(), version.qfe() };
-    // shortcut: a modified disc with the same title, version and size still reuses
-    // the manifest. Add an ISO fingerprint when that case matters.
+    // WORKAROUND: a modified disc with the same title, version and size still
+    // reuses the manifest. Add an ISO fingerprint when that case matters.
+    // Triggers on every extract rerun with a matching manifest.
     const stale = if (existing) |m|
         m.iso_size != src.size or m.title_id != h.execution.title_id or !std.mem.eql(u16, &m.xex_version, &xex_version)
     else
