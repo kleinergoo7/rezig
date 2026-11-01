@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(args);
 
     if (args.len < 2) {
-        std.debug.print("usage: boot <xex> [key]\n", .{});
+        std.debug.print("usage: boot <xex> [key] [budget]\n", .{});
         return;
     }
 
@@ -30,14 +30,18 @@ pub fn main(init: std.process.Init) !void {
         key = loaded;
     }
 
+    var budget = boot_budget;
+    if (args.len >= 4) {
+        budget = try std.fmt.parseInt(u32, args[3], 10);
+    }
+
     var img = try image.load(gpa, init.io, args[1], key);
     defer img.deinit(gpa);
 
     var ctx = Ctx.init(.{ .base = img.base_address, .data = img.bytes });
     // Stack top 256 bytes below the image end, matching the XEX loader.
     ctx.gpr[1] = img.base_address + @as(u32, @intCast(img.bytes.len)) - stack_reserve;
-    ctx.budget = boot_budget;
-    ctx.budget = boot_budget;
+    ctx.budget = budget;
 
     std.debug.print("boot: base 0x{X} entry 0x{X} size 0x{X}\n", .{
         img.base_address, img.entry_point, img.bytes.len,
