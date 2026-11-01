@@ -41,6 +41,14 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
     if (dbg_on) {
         dbg_calls[dbg_call_pos % dbg_calls.len] = entry_addr;
         dbg_call_pos +%= 1;
+        // TEMP-TRACE: dump the pool-init arguments at the spin loop entry.
+        if (entry_addr == 0x83492C90) {
+            std.debug.print("TEMP spin r29=0x{X} r30=0x{X} r27=0x{X} depth={d}\n", .{ ctx.gpr[29], ctx.gpr[30], ctx.gpr[27], ctx.depth });
+            std.debug.print("TEMP mem[r30+8]=0x{X} mem[r30+C]=0x{X}\n", .{
+                ctx.load32(@as(u32, @truncate(ctx.gpr[30])) +% 8),
+                ctx.load32(@as(u32, @truncate(ctx.gpr[30])) +% 12),
+            });
+        }
     }
     var steps: u32 = 0;
     var i: usize = 0;
@@ -602,6 +610,9 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
         // TEMP-TRACE: catch the exact instruction that corrupts r1.
         if (dbg_on and !dbg_r1_bad and r1_before >= 0x82000000 and ctx.gpr[31] != r1_before) {
             std.debug.print("TEMP r31 write at pc=0x{X} 0x{X} -> 0x{X} lr=0x{X} depth={d}\n", .{ cur, r1_before, ctx.gpr[31], ctx.lr, ctx.depth });
+        }
+        if (dbg_on and cur == 0x834AD8C0) {
+            std.debug.print("TEMP at 0x834AD8C0 r29=0x{X} r30=0x{X} r27=0x{X} lr=0x{X}\n", .{ ctx.gpr[29], ctx.gpr[30], ctx.gpr[27], ctx.lr });
         }
         i += 1;
     }

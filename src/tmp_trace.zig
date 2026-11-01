@@ -55,6 +55,12 @@ test "trace better16 entry path" {
     std.debug.print("TEMP total={d} budget={d} depth={d} fault={s}@0x{X}\n", .{
         interp.dbg_total, ctx.budget, ctx.depth, @tagName(ctx.fault.kind), ctx.fault.addr,
     });
+    std.debug.print("TEMP last pcs:\n", .{});
+    var k: usize = 0;
+    while (k < 16) : (k += 1) {
+        const idx = (interp.dbg_pos + interp.dbg_ring.len - 16 + k) % interp.dbg_ring.len;
+        std.debug.print("TEMP pc[{d}] = 0x{X}\n", .{ k, interp.dbg_ring[idx] });
+    }
     std.debug.print("TEMP last calls:\n", .{});
     var c: usize = 0;
     while (c < 32) : (c += 1) {
