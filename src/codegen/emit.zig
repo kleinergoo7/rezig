@@ -298,7 +298,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
     try out.print(allocator, "pub fn {s}(ctx: *Ctx) callconv(.c) void {{\n", .{
         abi.fnName(opts.addr, &name_buf),
     });
-    try out.print(allocator, "    if (ctx.depth >= Ctx.max_call_depth) {{\n        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n        return;\n    }}\n    ctx.depth += 1;\n    defer ctx.depth -= 1;\n", .{opts.addr});
+    try out.print(allocator, "    if (ctx.depth >= Ctx.max_call_depth) {{\n        ctx.fault = .{{ .kind = .recursion, .addr = 0x{X} }};\n        return;\n    }}\n    ctx.depth += 1;\n    defer ctx.depth -= 1;\n", .{opts.addr});
 
     if (!has_branch) {
         for (words, 0..) |word, i| {
@@ -1237,7 +1237,7 @@ test "golden function" {
     try testing.expectEqualStrings(
         \\pub fn g_00000100(ctx: *Ctx) callconv(.c) void {
         \\    if (ctx.depth >= Ctx.max_call_depth) {
-        \\        ctx.fault = .{ .kind = .unsupported, .addr = 0x100 };
+        \\        ctx.fault = .{ .kind = .recursion, .addr = 0x100 };
         \\        return;
         \\    }
         \\    ctx.depth += 1;

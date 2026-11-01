@@ -58,7 +58,6 @@ test "emitted functions match the interpreter" {
             ctx_b.lr = ctx_a.lr;
 
             interp.runTable(&ctx_a, f.addr, f.words, table) catch |e| {
-                if (e == error.StepLimit) continue;
                 std.debug.print("addr 0x{X} case {d}: interpreter failed: {s}\n", .{ f.addr, case, @errorName(e) });
                 return e;
             };

@@ -3,7 +3,7 @@
 const std = @import("std");
 const memory = @import("memory.zig");
 
-pub const FaultKind = enum { none, load, store, fetch, unsupported, trap };
+pub const FaultKind = enum { none, load, store, fetch, unsupported, trap, recursion };
 
 pub const Fault = struct {
     kind: FaultKind = .none,

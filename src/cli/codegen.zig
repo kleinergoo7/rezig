@@ -53,18 +53,33 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
             for (list.items) |c| allocator.free(c.words);
             list.deinit(allocator);
         }
+        var skipped: usize = 0;
+        var failed: usize = 0;
         for (found) |f| {
-            if (f.words.len == 0 or f.words.len > analyze.max_function_insns) continue;
-            if (!emit.supportsAll(f.addr, f.words)) continue;
+            if (f.words.len == 0 or f.words.len > analyze.max_function_insns) {
+                std.debug.print("codegen skip addr 0x{X}: bad length {d}\n", .{ f.addr, f.words.len });
+                skipped += 1;
+                continue;
+            }
+            if (!emit.supportsAll(f.addr, f.words)) {
+                std.debug.print("codegen skip addr 0x{X}: unsupported\n", .{f.addr});
+                skipped += 1;
+                continue;
+            }
             const words = try allocator.dupe(u32, f.words);
             errdefer allocator.free(words);
             const text = emit.function(allocator, words, .{ .addr = f.addr, .external_dispatch = true }) catch |e| {
                 std.debug.print("codegen fail addr 0x{X}: {s}\n", .{ f.addr, @errorName(e) });
                 allocator.free(words);
+                failed += 1;
                 continue;
             };
             allocator.free(text);
             try list.append(allocator, .{ .addr = f.addr, .words = words });
+        }
+        if (skipped + failed != 0) {
+            std.debug.print("codegen --all: {d} skipped, {d} failed, {d} emitted; refusing partial output\n", .{ skipped, failed, list.items.len });
+            return error.IncompleteCodegen;
         }
         picked = try list.toOwnedSlice(allocator);
     } else {

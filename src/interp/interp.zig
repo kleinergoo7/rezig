@@ -22,7 +22,7 @@ pub fn run(ctx: *ctx_mod.Ctx, words: []const u32) Error!void {
 /// mirrors the generated code's Zig call stack.
 pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: Table) Error!void {
     if (ctx.depth >= ctx_mod.Ctx.max_call_depth) {
-        ctx.fault = .{ .kind = .unsupported, .addr = entry_addr };
+        ctx.fault = .{ .kind = .recursion, .addr = entry_addr };
         return;
     }
     ctx.depth += 1;
