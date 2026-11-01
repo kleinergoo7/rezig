@@ -43,9 +43,15 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         const addrs = try slice.readAddressList(allocator, io, path);
         defer allocator.free(addrs);
         picked = try allocator.alloc(slice.Candidate, addrs.len);
+        var done: usize = 0;
+        errdefer {
+            for (picked[0..done]) |candidate| allocator.free(candidate.words);
+            allocator.free(picked);
+        }
         for (addrs, 0..) |addr, i| {
             var err_addr: u32 = 0;
             picked[i] = .{ .addr = addr, .words = try analyze.functionAt(allocator, sections[0..count], addr, &err_addr) };
+            done += 1;
         }
     } else if (opts.all == true) {
         var list: std.ArrayList(slice.Candidate) = .empty;
