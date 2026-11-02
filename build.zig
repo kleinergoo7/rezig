@@ -80,6 +80,7 @@ const Options = struct {
     elf: ?[]const u8,
     slice: ?[]const u8,
     slice_list: ?[]const u8,
+    budget: ?[]const u8,
 };
 
 /// Build options are global, so every step reads from this one table.
@@ -93,6 +94,7 @@ fn readOptions(b: *std.Build) Options {
         .elf = b.option([]const u8, "elf", "path to an ELF32 PowerPC file"),
         .slice = b.option([]const u8, "slice", "number of functions to select"),
         .slice_list = b.option([]const u8, "slice-list", "frozen address list"),
+        .budget = b.option([]const u8, "budget", "guest instructions for the boot run"),
     };
 }
 
@@ -257,7 +259,13 @@ fn addBootStep(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, targe
     const boot_exe = b.addExecutable(.{ .name = "rezig-boot", .root_module = boot_module });
     const run = b.addRunArtifact(boot_exe);
     run.addArg(xex);
-    if (opts.key) |key| run.addArg(key);
+    if (opts.key) |key| {
+        run.addArg(key);
+    } else if (opts.budget != null) {
+        // Positional placeholder: the budget arg follows the key slot.
+        run.addArg("-");
+    }
+    if (opts.budget) |budget| run.addArg(budget);
     step.dependOn(&run.step);
 }
 

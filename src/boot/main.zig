@@ -24,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var key: ?[16]u8 = null;
-    if (args.len >= 3) {
+    if (args.len >= 3 and !std.mem.eql(u8, args[2], "-")) {
         var loaded: [16]u8 = undefined;
         try aes.loadKey(init.io, args[2], &loaded);
         key = loaded;
