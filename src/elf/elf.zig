@@ -96,6 +96,7 @@ pub fn loadBytes(allocator: std.mem.Allocator, bytes: []const u8) Error!image.Im
         .bytes = img,
         .base_address = 0,
         .entry_point = h.entry,
+        .size_of_image = image_size,
         .sections = sections,
         .version = .{ .value = 0 },
         .title_id = 0,

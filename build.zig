@@ -1,6 +1,11 @@
 const std = @import("std");
 
+/// Hard rule: `.zig-cache` never exceeds this. Every build trims the oldest
+/// entries first, so the cap holds no matter what ran before.
+const max_cache_bytes: u64 = 5 * 1024 * 1024 * 1024;
+
 pub fn build(b: *std.Build) void {
+    enforceCacheCap(b);
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -292,4 +297,127 @@ fn addPortabilityStep(b: *std.Build, xextool: *std.Build.Module) void {
 fn failStep(b: *std.Build, step: *std.Build.Step, flag: []const u8) void {
     const fail = b.addFail(b.fmt("zig build {s} needs {s}", .{ step.name, flag }));
     step.dependOn(&fail.step);
+}
+
+/// Deletes the oldest `.zig-cache/o` and `.zig-cache/z` entries until the
+/// whole cache fits `max_cache_bytes`. Never fails the build: on any error
+/// the guard gives up and the build proceeds.
+fn enforceCacheCap(b: *std.Build) void {
+    enforceCacheCapInner(b.allocator, b.graph.io) catch {};
+}
+
+const CacheEntry = struct {
+    parent: []const u8,
+    name: []const u8,
+    size: u64,
+    mtime: i96,
+};
+
+fn enforceCacheCapInner(allocator: std.mem.Allocator, io: std.Io) !void {
+    const Io = std.Io;
+    const cwd = Io.Dir.cwd();
+    var cache = cwd.openDir(io, ".zig-cache", .{ .iterate = true }) catch return;
+    defer cache.close(io);
+
+    // Transient leftovers from killed builds. Only entries untouched for over
+    // an hour are swept, so the running build's own tmp dirs are never raced.
+    // This sweep is safe because this repo never overlaps builds.
+    const now = std.Io.Timestamp.now(io, .real).nanoseconds;
+    const stale_ns: i96 = std.time.ns_per_hour;
+    var swept: u64 = 0;
+    {
+        var it = cache.iterate();
+        while (it.next(io) catch null) |entry| {
+            if (entry.kind != .directory) continue;
+            if (!std.mem.startsWith(u8, entry.name, "tmp")) continue;
+            const st = cache.statFile(io, entry.name, .{}) catch continue;
+            if (now - st.mtime.nanoseconds < stale_ns) continue;
+            const name = allocator.dupe(u8, entry.name) catch continue;
+            defer allocator.free(name);
+            swept +|= treeBytes(io, cache, name);
+            cache.deleteTree(io, name) catch {};
+        }
+    }
+
+    var total: u64 = 0;
+    var candidates: std.ArrayList(CacheEntry) = .empty;
+    defer {
+        for (candidates.items) |entry| {
+            allocator.free(entry.parent);
+            allocator.free(entry.name);
+        }
+        candidates.deinit(allocator);
+    }
+    {
+        var it = cache.iterate();
+        while (it.next(io) catch null) |entry| {
+            if (entry.kind != .directory) continue;
+            if (std.mem.startsWith(u8, entry.name, "tmp")) continue;
+            const evictable = std.mem.eql(u8, entry.name, "o") or std.mem.eql(u8, entry.name, "z");
+            var sub = cache.openDir(io, entry.name, .{ .iterate = true }) catch continue;
+            defer sub.close(io);
+            if (!evictable) {
+                total +|= treeBytesOpen(io, sub);
+                continue;
+            }
+            var sub_it = sub.iterate();
+            while (sub_it.next(io) catch null) |hash| {
+                if (hash.kind != .directory) continue;
+                const st = sub.statFile(io, hash.name, .{}) catch continue;
+                var hdir = sub.openDir(io, hash.name, .{ .iterate = true }) catch continue;
+                const size = treeBytesOpen(io, hdir);
+                hdir.close(io);
+                total +|= size;
+                try candidates.append(allocator, .{
+                    .parent = try allocator.dupe(u8, entry.name),
+                    .name = try allocator.dupe(u8, hash.name),
+                    .size = size,
+                    .mtime = st.mtime.nanoseconds,
+                });
+            }
+        }
+    }
+
+    if (total <= max_cache_bytes) {
+        if (swept != 0) std.debug.print("cache: swept {d} MiB of tmp leftovers, total {d} MiB\n", .{ swept >> 20, total >> 20 });
+        return;
+    }
+    std.mem.sort(CacheEntry, candidates.items, {}, struct {
+        fn lessThan(_: void, a: CacheEntry, b: CacheEntry) bool {
+            return a.mtime < b.mtime;
+        }
+    }.lessThan);
+    var freed: u64 = swept;
+    for (candidates.items) |entry| {
+        if (total - freed <= max_cache_bytes) break;
+        var parent = cache.openDir(io, entry.parent, .{}) catch continue;
+        parent.deleteTree(io, entry.name) catch {};
+        parent.close(io);
+        freed +|= entry.size;
+    }
+    std.debug.print("cache: cap {d} MiB exceeded, evicted oldest entries, freed {d} MiB\n", .{ max_cache_bytes >> 20, freed >> 20 });
+}
+
+/// Byte size of the tree at `path` relative to `dir`.
+fn treeBytes(io: std.Io, dir: std.Io.Dir, path: []const u8) u64 {
+    var sub = dir.openDir(io, path, .{ .iterate = true }) catch return 0;
+    const size = treeBytesOpen(io, sub);
+    sub.close(io);
+    return size;
+}
+
+fn treeBytesOpen(io: std.Io, dir: std.Io.Dir) u64 {
+    var total: u64 = 0;
+    var it = dir.iterate();
+    while (it.next(io) catch return total) |entry| {
+        if (entry.kind == .directory) {
+            var sub = dir.openDir(io, entry.name, .{ .iterate = true }) catch continue;
+            total +|= treeBytesOpen(io, sub);
+            sub.close(io);
+        } else {
+            const st = dir.statFile(io, entry.name, .{}) catch continue;
+            total +|= st.size;
+        }
+    }
+    return total;
 }

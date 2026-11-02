@@ -25,6 +25,8 @@ current request, then this file, then `docs/`.
   (mtime or hash). Stale artifact reads exactly like successful build.
 - Every claim cites command + exit status + output. No "done"/"fixed"/"works" bare.
 - New native or third-party dependency: say so in the change.
+- `.zig-cache` has a hard 5 GiB cap, enforced by `enforceCacheCap` in
+  `build.zig` (trims oldest entries on every build). Never disable it.
 
 ## 2. Language, style, boundaries
 

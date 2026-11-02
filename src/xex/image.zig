@@ -34,6 +34,9 @@ pub const Image = struct {
     bytes: []u8,
     base_address: u32,
     entry_point: u32,
+    /// Virtual size from the PE optional header. Larger than `bytes.len` when
+    /// the payload omits zero-filled pages.
+    size_of_image: u32,
     sections: []PeSection,
     version: header.Version,
     title_id: u32,
@@ -132,6 +135,7 @@ pub fn loadBytes(
         .bytes = image_bytes,
         .base_address = pe.base_address,
         .entry_point = pe.entry_point,
+        .size_of_image = pe.size_of_image,
         .sections = pe.sections,
         .version = h.execution.version,
         .title_id = h.execution.title_id,
@@ -171,7 +175,12 @@ fn decompressBasic(payload: []const u8, out: []u8, blocks: []const header.Block)
     @memset(out[out_pos..], 0);
 }
 
-const Pe = struct { base_address: u32, entry_point: u32, sections: []PeSection };
+const Pe = struct {
+    base_address: u32,
+    entry_point: u32,
+    size_of_image: u32,
+    sections: []PeSection,
+};
 
 fn parsePe(allocator: std.mem.Allocator, bytes: []const u8, encrypted: bool) Error!Pe {
     const invalid = if (encrypted) error.WrongKey else error.BadPe;
@@ -234,6 +243,7 @@ fn parsePe(allocator: std.mem.Allocator, bytes: []const u8, encrypted: bool) Err
     return .{
         .base_address = base_address,
         .entry_point = base_address +% entry_rva,
+        .size_of_image = size_of_image,
         .sections = sections,
     };
 }

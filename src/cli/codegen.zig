@@ -153,11 +153,13 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         for (chunks.items, 0..) |name, ci| {
             try central.print(allocator, "const chunk_{d:0>3} = @import(\"{s}\");\n", .{ ci, name });
         }
-        try central.appendSlice(allocator, "\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n");
+        // Import thunks live in the tail of `.text`, so a chunk must not claim
+        // a thunk address before the kernel switch sees it.
+        try central.appendSlice(allocator, "\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    if (@import(\"kernel.zig\").dispatch(addr, ctx)) return true;\n");
         for (chunks.items, 0..) |_, ci| {
             try central.print(allocator, "    if (chunk_{d:0>3}.chunk_dispatch(addr, ctx)) return true;\n", .{ci});
         }
-        try central.appendSlice(allocator, "    return @import(\"kernel.zig\").dispatch(addr, ctx);\n}\n");
+        try central.appendSlice(allocator, "    return false;\n}\n\npub fn init(ctx: *Ctx, cell_base: u32) void {\n    @import(\"kernel.zig\").init(ctx, cell_base);\n}\n");
 
         var dir = try Io.Dir.cwd().createDirPathOpen(io, opts.out, .{});
         defer dir.close(io);
@@ -166,10 +168,21 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
         try atomic.file.writeStreamingAll(io, central.items);
         try atomic.replace(io);
 
-        // Import thunks become host stubs that log on first call.
-        var kernel = std.ArrayList(u8).empty;
-        defer kernel.deinit(allocator);
-        try kernel.appendSlice(allocator, "const std = @import(\"std\");\nconst Ctx = @import(\"rezig_runtime\").ctx.Ctx;\n\nfn logImport(comptime name: []const u8, comptime index: u16, ctx: *const Ctx) void {\n    std.debug.print(\"import {s}[0x{X}] lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X} r6=0x{X}\\n\", .{ name, index, ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5], ctx.gpr[6] });\n}\n\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
+        // Import thunks become host stubs that log on first call. The same
+        // table patches the IAT slots: a function slot points at its thunk,
+        // a data slot points at a guest cell the guest can dereference.
+        const ImportEntry = struct {
+            slot: u32,
+            thunk: u32,
+            name: []const u8,
+            ordinal: u16,
+            is_variable: bool,
+        };
+        var imports: std.ArrayList(ImportEntry) = .empty;
+        defer {
+            for (imports.items) |entry| allocator.free(entry.name);
+            imports.deinit(allocator);
+        }
         if (!loaded.is_elf) {
             // Import tables live in the unencrypted header. A key is only needed
             // when the payload is encrypted; `image.load` already handled that.
@@ -191,23 +204,47 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
                 };
                 for (xex.import_libraries.items) |lib| {
                     const name = std.mem.sliceTo(&lib.name, 0);
-                    var pair_index: usize = 0;
-                    while (pair_index + 1 < lib.addresses.len) : (pair_index += 2) {
-                        const thunk = lib.addresses[pair_index + 1];
-                        if (thunk == 0) continue;
-                        // The thunk's first word is 0xTTTT_ORD: high half is a
-                        // type tag, low half the real import ordinal.
-                        var ordinal: u16 = 0;
-                        const off = @as(i64, thunk) - @as(i64, img.base_address);
-                        if (off >= 0 and off + 4 <= img.bytes.len) {
-                            const word = std.mem.readInt(u32, img.bytes[@intCast(off)..][0..4], .big);
-                            ordinal = @truncate(word);
-                        }
-                        try kernelCase(allocator, &kernel, thunk, name, ordinal);
+                    // Records mix two kinds of guest word. An import descriptor
+                    // lives in the IAT and has a zero high byte; a thunk stub
+                    // starts with 0x01_00_ORD. A function import has a thunk
+                    // with the same ordinal, a data import has none.
+                    for (lib.addresses, 0..) |slot, record| {
+                        if (slot == 0) continue;
+                        const word = try importWord(img, slot, name, record);
+                        if (word >> 24 != 0) continue;
+                        const ordinal: u16 = @truncate(word);
+                        const thunk = try matchingThunk(img, lib.addresses, ordinal, name);
+                        try imports.append(allocator, .{
+                            .slot = slot,
+                            .thunk = thunk,
+                            .name = try allocator.dupe(u8, name),
+                            .ordinal = ordinal,
+                            .is_variable = thunk == 0,
+                        });
                     }
                 }
             }
         }
+
+        var kernel = std.ArrayList(u8).empty;
+        defer kernel.deinit(allocator);
+        try kernel.appendSlice(allocator, "const std = @import(\"std\");\nconst Ctx = @import(\"rezig_runtime\").ctx.Ctx;\n\nfn logImport(comptime name: []const u8, comptime index: u16, ctx: *const Ctx) void {\n    std.debug.print(\"import {s}[0x{X}] lr=0x{X} r3=0x{X} r4=0x{X} r5=0x{X} r6=0x{X}\\n\", .{ name, index, ctx.lr, ctx.gpr[3], ctx.gpr[4], ctx.gpr[5], ctx.gpr[6] });\n}\n\npub fn init(ctx: *Ctx, cell_base: u32) void {\n    var cell = cell_base;\n    _ = &cell;\n");
+        for (imports.items) |entry| {
+            if (entry.is_variable) {
+                try kernel.print(allocator, "    // {f}[0x{X}] is data: dereferenceable guest cell\n    ctx.store32(0x{X}, cell);\n    ctx.store32(cell, 0);\n    cell += 4;\n", .{
+                    std.zig.fmtString(entry.name), entry.ordinal, entry.slot,
+                });
+            } else {
+                try kernel.print(allocator, "    // {f}[0x{X}] is a function: point at its thunk\n    ctx.store32(0x{X}, 0x{X});\n", .{
+                    std.zig.fmtString(entry.name), entry.ordinal, entry.slot, entry.thunk,
+                });
+            }
+        }
+        try kernel.appendSlice(allocator, "    @import(\"rezig_runtime\").kernel.initThread(ctx);\n}\n\npub fn dispatch(addr: u32, ctx: *Ctx) bool {\n    return switch (addr) {\n");
+        for (imports.items) |entry| {
+            if (entry.thunk != 0) try kernelCase(allocator, &kernel, entry.thunk, entry.name, entry.ordinal);
+        }
+        // Thunk switch: unknown addresses fall through to chunk dispatch.
         try kernel.appendSlice(allocator, "        else => false,\n    };\n}\n");
         var kernel_atomic = try dir.createFileAtomic(io, "kernel.zig", .{ .replace = true });
         defer kernel_atomic.deinit(io);
@@ -282,6 +319,32 @@ pub fn run(allocator: std.mem.Allocator, io: Io, opts: Options, key: ?[16]u8) !v
     var writer = Io.File.stdout().writer(io, &buf);
     try writer.interface.print("emitted {d} functions to {s}/slice.zig\n", .{ picked.len, opts.out });
     try writer.interface.flush();
+}
+
+/// Reads an import record's first word from the loaded image. Records always
+/// point into the image; a record outside it means the table is malformed.
+fn importWord(img: *const @import("../xex/image.zig").Image, addr: u32, lib: []const u8, record: usize) !u32 {
+    const off = @as(i64, addr) - @as(i64, img.base_address);
+    if (off < 0 or off + 4 > img.bytes.len) {
+        std.debug.print("codegen: {s} record {d} address 0x{X} is outside the image\n", .{ lib, record, addr });
+        return error.ImportOutsideImage;
+    }
+    return std.mem.readInt(u32, img.bytes[@intCast(off)..][0..4], .big);
+}
+
+/// Returns the thunk stub address for `ordinal`, or 0 when the import is data.
+fn matchingThunk(
+    img: *const @import("../xex/image.zig").Image,
+    addresses: []const u32,
+    ordinal: u16,
+    lib: []const u8,
+) !u32 {
+    for (addresses, 0..) |addr, record| {
+        if (addr == 0) continue;
+        const word = try importWord(img, addr, lib, record);
+        if (word >> 24 == 1 and @as(u16, @truncate(word)) == ordinal) return addr;
+    }
+    return 0;
 }
 
 fn kernelCase(

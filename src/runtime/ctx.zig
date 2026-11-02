@@ -9,6 +9,9 @@ pub const Fault = struct {
     kind: FaultKind = .none,
     addr: u32 = 0,
     size: u8 = 0,
+    /// Address of the instruction that recorded the fault, so the message names
+    /// the instruction and not only the bad address it touched.
+    pc: u32 = 0,
 };
 
 pub const Ctx = struct {
@@ -30,11 +33,18 @@ pub const Ctx = struct {
     /// Set when the budget runs out, so every caller unwinds instead of
     /// continuing with an exhausted budget.
     halted: bool,
+    /// Stop at the first fault instead of running on with a bad state.
+    strict_faults: bool,
+    /// Address of the instruction about to execute.
+    pc: u32,
+    /// Guest range the host services allocate from: pools and virtual memory.
+    /// Zero when the harness did not provide one.
+    arena_base: u32,
+    arena_end: u32,
     mem: memory.Memory,
     fault: Fault,
 
     pub const max_call_depth: u32 = 4096;
-
     pub fn init(mem: memory.Memory) Ctx {
         return .{
             .gpr = @splat(0),
@@ -52,6 +62,10 @@ pub const Ctx = struct {
             .depth = 0,
             .budget = 0,
             .halted = false,
+            .strict_faults = false,
+            .pc = 0,
+            .arena_base = 0,
+            .arena_end = 0,
             .mem = mem,
             .fault = .{},
         };
@@ -788,10 +802,16 @@ pub const Ctx = struct {
         std.mem.writeInt(T, self.mem.data[offset..][0..size], @truncate(value), .big);
     }
 
+    /// Records a call to an address that has no emitted body.
+    pub fn failUnsupported(self: *Ctx, target: u32) void {
+        self.recordFault(.unsupported, target, 0);
+    }
+
     /// The first fault wins until `resetFault`, so the original cause is never masked.
     fn recordFault(self: *Ctx, kind: FaultKind, addr: u32, size: u8) void {
         if (self.fault.kind != .none) return;
-        self.fault = .{ .kind = kind, .addr = addr, .size = size };
+        self.fault = .{ .kind = kind, .addr = addr, .size = size, .pc = self.pc };
+        if (self.strict_faults) self.halted = true;
     }
 };
 

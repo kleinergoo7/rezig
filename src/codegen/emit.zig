@@ -305,6 +305,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
             const addr = base + @as(u32, @intCast(i)) * 4;
             try out.print(allocator, "    // 0x{X:0>8}\n", .{addr});
             try out.appendSlice(allocator, "    if (ctx.halted) return;\n    if (ctx.budget != 0) {\n        ctx.budget -= 1;\n        if (ctx.budget == 0) {\n            ctx.halted = true;\n            return;\n        }\n    }\n");
+            try out.print(allocator, "    ctx.pc = 0x{X};\n", .{addr});
             const op = ppc.decode.decode(word) catch return error.UnsupportedOpcode;
             if (op == .blr) {
                 try out.appendSlice(allocator, "    return;\n");
@@ -327,6 +328,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
         const next = addr + 4;
 
         try out.print(allocator, "            0x{X} => {{\n", .{addr});
+        try out.print(allocator, "    ctx.pc = 0x{X};\n", .{addr});
         const op = ppc.decode.decode(word) catch return error.UnsupportedOpcode;
 
         switch (op) {
@@ -346,7 +348,7 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                 } else if (f.link) {
                     try out.print(allocator, "                if (ctx.branch({d}, {d})) {{\n", .{ f.bo, f.bi });
                     try out.print(allocator, "                    ctx.lr = 0x{X};\n", .{next});
-                    try out.print(allocator, "                    if (!{s}(0x{X}, ctx)) {{\n                        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n                        return;\n                    }}\n", .{ opts.call(), target, target });
+                    try out.print(allocator, "                    if (!{s}(0x{X}, ctx)) {{\n                        ctx.failUnsupported(0x{X});\n                        return;\n                    }}\n", .{ opts.call(), target, target });
                     try out.print(allocator, "                }}\n                pc = 0x{X};\n", .{next});
                 } else if (inRange(target, base, end)) {
                     try out.print(allocator, "                pc = if (ctx.branch({d}, {d})) 0x{X} else 0x{X};\n", .{
@@ -364,11 +366,11 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
                     try out.print(allocator, "                if (ctx.branch({d}, {d})) {{\n", .{ f.bo, f.bi });
                     try out.print(allocator, "                    const target: u32 = {s};\n", .{target});
                     try out.print(allocator, "                    ctx.lr = 0x{X};\n", .{next});
-                    try out.print(allocator, "                    if (!{s}(target, ctx)) {{\n                        ctx.fault = .{{ .kind = .unsupported, .addr = target }};\n                        return;\n                    }}\n", .{opts.call()});
+                    try out.print(allocator, "                    if (!{s}(target, ctx)) {{\n                        ctx.failUnsupported(target);\n                        return;\n                    }}\n", .{opts.call()});
                     try out.print(allocator, "                }}\n                pc = 0x{X};\n", .{next});
                 } else if (f.to_ctr) {
                     try out.print(allocator, "                if (ctx.branch({d}, {d})) {{\n", .{ f.bo, f.bi });
-                    try out.print(allocator, "                    if (!{s}(ctx.ctr, ctx)) {{\n                        ctx.fault = .{{ .kind = .unsupported, .addr = ctx.ctr }};\n                    }}\n", .{opts.call()});
+                    try out.print(allocator, "                    if (!{s}(ctx.ctr, ctx)) {{\n                        ctx.failUnsupported(ctx.ctr);\n                    }}\n", .{opts.call()});
                     try out.print(allocator, "                    return;\n                }}\n                pc = 0x{X};\n", .{next});
                 } else {
                     try out.print(allocator, "                if (ctx.branch({d}, {d})) return;\n                pc = 0x{X};\n", .{
@@ -390,14 +392,14 @@ pub fn function(allocator: std.mem.Allocator, words: []const u32, opts: Options)
 }
 
 fn tailCall(allocator: std.mem.Allocator, out: *std.ArrayList(u8), target: u32, call: []const u8) !void {
-    try out.print(allocator, "                if (!{s}(0x{X}, ctx)) {{\n                    ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n                }}\n                return;\n", .{ call, target, target });
+    try out.print(allocator, "                if (!{s}(0x{X}, ctx)) {{\n                    ctx.failUnsupported(0x{X});\n                }}\n                return;\n", .{ call, target, target });
 }
 
 fn lower(allocator: std.mem.Allocator, out: *std.ArrayList(u8), op: insn, addr: u32, call: []const u8) Error!void {
     switch (op) {
         .bl => |f| {
             const target = if (f.absolute) f.target else addr +% f.target;
-            try out.print(allocator, "    ctx.lr = 0x{X};\n    if (!{s}(0x{X}, ctx)) {{\n        ctx.fault = .{{ .kind = .unsupported, .addr = 0x{X} }};\n        return;\n    }}\n", .{
+            try out.print(allocator, "    ctx.lr = 0x{X};\n    if (!{s}(0x{X}, ctx)) {{\n        ctx.failUnsupported(0x{X});\n        return;\n    }}\n", .{
                 addr +% 4, call, target, target,
             });
         },
@@ -1252,6 +1254,7 @@ test "golden function" {
         \\            return;
         \\        }
         \\    }
+        \\    ctx.pc = 0x100;
         \\    ctx.gpr[3] = 0x0000000000000001;
         \\    // 0x00000104
         \\    if (ctx.halted) return;
@@ -1262,6 +1265,7 @@ test "golden function" {
         \\            return;
         \\        }
         \\    }
+        \\    ctx.pc = 0x104;
         \\    ctx.store32(@as(u32, @truncate(ctx.gpr[11])) +% 0x00000014, ctx.gpr[10]);
         \\    // 0x00000108
         \\    if (ctx.halted) return;
@@ -1272,6 +1276,7 @@ test "golden function" {
         \\            return;
         \\        }
         \\    }
+        \\    ctx.pc = 0x108;
         \\    return;
         \\}
         \\

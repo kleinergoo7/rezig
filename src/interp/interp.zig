@@ -44,13 +44,14 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
 
         const insn = decode.decode(words[i]) catch return error.Unsupported;
         const cur = entry_addr +% @as(u32, @intCast(i)) * 4;
+        ctx.pc = cur;
         switch (insn) {
             .blr => return,
             .bl => |f| {
                 const target = if (f.absolute) f.target else cur +% f.target;
                 ctx.lr = cur +% 4;
                 const callee = lookup(table, target) orelse {
-                    ctx.fault = .{ .kind = .unsupported, .addr = target };
+                    ctx.failUnsupported(target);
                     return;
                 };
                 try runTable(ctx, target, callee, table);
@@ -63,7 +64,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                     continue;
                 }
                 const callee = lookup(table, target) orelse {
-                    ctx.fault = .{ .kind = .unsupported, .addr = target };
+                    ctx.failUnsupported(target);
                     return;
                 };
                 try runTable(ctx, target, callee, table);
@@ -78,7 +79,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 if (f.link) {
                     ctx.lr = cur +% 4;
                     const callee = lookup(table, target) orelse {
-                        ctx.fault = .{ .kind = .unsupported, .addr = target };
+                        ctx.failUnsupported(target);
                         return;
                     };
                     try runTable(ctx, target, callee, table);
@@ -91,7 +92,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                     continue;
                 }
                 const callee = lookup(table, target) orelse {
-                    ctx.fault = .{ .kind = .unsupported, .addr = target };
+                    ctx.failUnsupported(target);
                     return;
                 };
                 try runTable(ctx, target, callee, table);
@@ -106,7 +107,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 if (f.link) {
                     ctx.lr = cur +% 4;
                     const callee = lookup(table, target) orelse {
-                        ctx.fault = .{ .kind = .unsupported, .addr = target };
+                        ctx.failUnsupported(target);
                         return;
                     };
                     try runTable(ctx, target, callee, table);
@@ -115,7 +116,7 @@ pub fn runTable(ctx: *ctx_mod.Ctx, entry_addr: u32, words: []const u32, table: T
                 }
                 if (f.to_ctr) {
                     const callee = lookup(table, target) orelse {
-                        ctx.fault = .{ .kind = .unsupported, .addr = target };
+                        ctx.failUnsupported(target);
                         return;
                     };
                     try runTable(ctx, target, callee, table);
